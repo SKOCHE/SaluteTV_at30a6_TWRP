@@ -14,20 +14,63 @@ jobs:
     - name: Build
       run: |
         mkdir twrp && cd twrp
+        
+        # 1. Инициализация
         repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
+        
+        # 2. СИНХРОНИЗАЦИЯ (это не было!)
+        echo "Syncing repository..."
         repo sync -c -j2 --no-tags --no-clone-bundle
+        
+        # 3. Копирование устройства
         mkdir -p device/salute/at30a6
         cp ../*.mk device/salute/at30a6/
         [ -d "../prebuilt" ] && cp -r ../prebuilt device/salute/at30a6/
+        
+        # 4. Настройка
         export ALLOW_MISSING_DEPENDENCIES=true
         export USE_LD=gold
         source build/envsetup.sh
+        
+        # 5. Сборка
         lunch twrp_at30a6-eng 2>/dev/null || export TARGET_PRODUCT=twrp_at30a6
         make -j2 recoveryimage || make -j2 recovery
-        find out -name "recovery.img" -exec cp {} ../recovery.img \;
-        [ -f ../recovery.img ] && echo "✅" && ls -lh ../recovery.img || (echo "❌" && exit 1)
+        
+        # 6. ПОИСК - исправленный
+        echo "Searching for recovery.img..."
+        
+        # Вариант 1: В product/at30a6
+        if [ -f "out/target/product/at30a6/recovery.img" ]; then
+          cp out/target/product/at30a6/recovery.img ../recovery.img
+          echo "✅ Found in: out/target/product/at30a6/"
+        
+        # Вариант 2: В любой папке product
+        else
+          find out/target/product -name "recovery.img" -type f 2>/dev/null | head -1 | while read img; do
+            echo "✅ Found: $img"
+            cp "$img" ../recovery.img
+          done
+        fi
+        
+        # Вариант 3: Глобальный поиск
+        if [ ! -f "../recovery.img" ]; then
+          find . -name "recovery.img" -type f 2>/dev/null | head -1 | while read img; do
+            echo "✅ Found globally: $img"
+            cp "$img" ../recovery.img
+          done
+        fi
+        
+        # Финальная проверка
+        if [ -f "../recovery.img" ]; then
+          echo "🎉 SUCCESS: TWRP built!"
+          ls -lh ../recovery.img
+        else
+          echo "❌ ERROR: No recovery.img found"
+          echo "Searching for any .img files:"
+          find . -name "*.img" -type f 2>/dev/null | head -5
+          exit 1
+        fi
     
-    # СОХРАНЕНИЕ РЕЗУЛЬТАТА
     - name: Save TWRP recovery
       uses: actions/upload-artifact@v4
       with:
