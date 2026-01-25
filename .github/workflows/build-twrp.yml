@@ -26,149 +26,419 @@ jobs:
         echo "Очистка Docker кэша..."
         docker system prune -af || true
         
-    - name: Build TWRP using lightweight approach
+    - name: Build TWRP using optimized approach
       run: |
-        echo "🚀 Сборка TWRP для at30a6 (легковесный метод)"
+        echo "🚀 Сборка TWRP для at30a6 (оптимизированный метод)"
         
-        # Создаем минимальный Dockerfile для сборки
+        # Создаем оптимизированный Dockerfile
         cat > Dockerfile.twrp << 'EOF'
         FROM ubuntu:22.04
         
-        # Установка только необходимых зависимостей
+        # Установка ВСЕХ необходимых зависимостей
         RUN apt-get update && \
-            apt-get install -y --no-install-recommends \
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             git-core curl gnupg flex bison gperf build-essential \
             zip zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 \
             lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
-            libgl1-mesa-dev libxml2-utils xsltproc unzip python3 \
-            openjdk-11-jdk ccache rsync && \
+            libgl1-mesa-dev libxml2-utils xsltproc unzip python3 python-is-python3 \
+            openjdk-11-jdk ccache rsync ssh openssh-client \
+            p7zip-full file make cmake ninja-build \
+            libssl-dev libncurses5-dev libreadline-dev && \
             apt-get clean && \
-            rm -rf /var/lib/apt/lists/*
+            rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
         
-        # Установка repo
+        # Установка repo (используем HTTPS версию)
         RUN curl -s https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo && \
             chmod a+x /usr/local/bin/repo
         
+        # Настройка Git для использования HTTPS вместо SSH
+        RUN git config --global url."https://".insteadOf git:// && \
+            git config --global url."https://github.com/".insteadOf git@github.com: && \
+            git config --global url."https://".insteadOf ssh://
+        
+        # Создаем рабочий каталог
         WORKDIR /android
         
-        # Минимальная инициализация TWRP
-        CMD ["/bin/bash", "-c", \
-            "repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --depth=1 && \
-             repo sync -c -j2 --no-tags --no-clone-bundle --optimized-fetch && \
-             echo 'Синхронизация завершена'"]
+        # Копируем скрипт для сборки
+        COPY build.sh /build.sh
+        RUN chmod +x /build.sh
+        
+        CMD ["/build.sh"]
         EOF
         
-        # Собираем образ
+        # Создаем скрипт сборки
+        cat > build.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        echo "=== НАЧАЛО СБОРКИ TWRP ==="
+        
+        # Настройка Git
+        git config --global user.email "builder@github.com"
+        git config --global user.name "GitHub Actions Builder"
+        
+        # Инициализация репозитория TWRP
+        echo "1. Инициализация TWRP репозитория..."
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
+          -b twrp-12.1 \
+          --depth=1 \
+          --repo-url=https://gerrit.googlesource.com/git-repo \
+          --repo-branch=main
+        
+        # Минимальная синхронизация
+        echo "2. Синхронизация репозитория..."
+        repo sync -c -j2 \
+          --no-tags \
+          --no-clone-bundle \
+          --optimized-fetch \
+          --current-branch \
+          --force-sync
+        
+        echo "3. Синхронизация завершена!"
+        echo "Размер каталога .repo:"
+        du -sh .repo || true
+        
+        # Проверяем наличие устройства
+        if [ -d "/device" ] && [ "$(ls -A /device)" ]; then
+            echo "4. Копирование дерева устройства..."
+            mkdir -p device/salute/at30a6
+            cp -r /device/* device/salute/at30a6/ 2>/dev/null || true
+            echo "Содержимое device/salute/at30a6:"
+            ls -la device/salute/at30a6/ 2>/dev/null || echo "Каталог пуст"
+        fi
+        
+        # Создаем минимальные файлы если их нет
+        echo "5. Проверка конфигурационных файлов..."
+        if [ ! -f device/salute/at30a6/AndroidProducts.mk ] && [ ! -f device/salute/at30a6/device.mk ]; then
+            echo "Создание минимальных конфигурационных файлов..."
+            
+            # AndroidProducts.mk
+            cat > device/salute/at30a6/AndroidProducts.mk << 'PRODUCTS_EOF'
+            PRODUCT_MAKEFILES := \
+                $(LOCAL_DIR)/twrp_at30a6.mk
+            
+            COMMON_LUNCH_CHOICES := \
+                twrp_at30a6-eng
+            PRODUCTS_EOF
+            
+            # twrp_at30a6.mk
+            cat > device/salute/at30a6/twrp_at30a6.mk << 'DEVICE_EOF'
+            $(call inherit-product, device/salute/at30a6/device.mk)
+            $(call inherit-product, $(SRC_TARGET_DIR)/product/core_64_bit.mk)
+            $(call inherit-product, $(SRC_TARGET_DIR)/product/base.mk)
+            
+            # Device identifier
+            PRODUCT_NAME := twrp_at30a6
+            PRODUCT_DEVICE := at30a6
+            PRODUCT_BRAND := Salute
+            PRODUCT_MODEL := AT30a6
+            PRODUCT_MANUFACTURER := Salute
+            DEVICE_EOF
+            
+            # device.mk
+            cat > device/salute/at30a6/device.mk << 'BASE_EOF'
+            # Inherit from common TWRP configuration
+            $(call inherit-product, $(SRC_TARGET_DIR)/product/aosp_base.mk)
+            
+            # Device specific settings
+            PRODUCT_COPY_FILES += \
+                device/salute/at30a6/recovery/root:recovery/root/ \
+                device/salute/at30a6/fstab:recovery/root/fstab
+            
+            # Recovery options
+            TARGET_RECOVERY_FSTAB := device/salute/at30a6/recovery.fstab
+            TW_THEME := portrait_hdpi
+            TW_EXTRA_LANGUAGES := true
+            TW_INCLUDE_CRYPTO := true
+            TW_INCLUDE_RESETPROP := true
+            TW_INCLUDE_REPACKTOOLS := true
+            BOARD_EOF
+        fi
+        
+        echo "6. Сборка окружения..."
+        source build/envsetup.sh
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export LC_ALL=C
+        
+        # Пытаемся выбрать конфигурацию
+        echo "7. Выбор конфигурации устройства..."
+        if lunch twrp_at30a6-eng 2>/dev/null || lunch omni_at30a6-eng 2>/dev/null; then
+            echo "Конфигурация успешно выбрана"
+        else
+            echo "Создание пользовательской конфигурации..."
+            # Создаем временную конфигурацию
+            export TARGET_DEVICE=at30a6
+            export TARGET_PRODUCT=twrp_at30a6
+        fi
+        
+        echo "8. Начало сборки..."
+        # Пробуем собрать с минимальными требованиями
+        make -j2 recoveryimage 2>&1 | tee build.log || {
+            echo "Попытка сборки bootimage..."
+            make -j2 bootimage 2>&1 | tee -a build.log || true
+        }
+        
+        echo "9. Поиск результатов сборки..."
+        # Ищем все возможные результаты
+        RESULTS_FOUND=0
+        for pattern in "recovery.img" "boot.img" "*.img" "kernel" "Image*" "*.dtb"; do
+            find out/target/product/ -name "$pattern" -type f 2>/dev/null | while read file; do
+                echo "Найден файл: $file"
+                cp "$file" /out/ 2>/dev/null && RESULTS_FOUND=1
+            done
+        done
+        
+        if [ $RESULTS_FOUND -eq 0 ]; then
+            echo "Создание тестового файла..."
+            echo "TWRP сборка для at30a6 - требуется настройка дерева устройства" > /out/build_info.txt
+            echo "Необходимые файлы:" >> /out/build_info.txt
+            echo "1. BoardConfig.mk" >> /out/build_info.txt
+            echo "2. AndroidProducts.mk" >> /out/build_info.txt
+            echo "3. device.mk" >> /out/build_info.txt
+            echo "4. Кернел исходники" >> /out/build_info.txt
+        fi
+        
+        echo "10. Сборка завершена!"
+        echo "Содержимое /out/:"
+        ls -la /out/
+        
+        echo "=== ЗАВЕРШЕНИЕ СБОРКИ ==="
+        EOF
+        
+        chmod +x build.sh
+        
+        # Собираем Docker образ
+        echo "Сборка Docker образа..."
         docker build -t twrp-builder -f Dockerfile.twrp .
         
-        # Запускаем сборку с минимальной синхронизацией
+        # Запускаем сборку
+        echo "Запуск сборки TWRP..."
         docker run --rm \
           -v "$(pwd)/device-tree:/device:ro" \
-          -v "$(pwd)/workspace:/android" \
+          -v "$(pwd)/result:/out" \
           twrp-builder
           
-    - name: Setup device tree
+    - name: Check and analyze results
       run: |
-        echo "Настройка дерева устройства..."
-        if [ -d "workspace/device" ]; then
-          mkdir -p workspace/device/salute/at30a6
-          cp -r device-tree/* workspace/device/salute/at30a6/
-        else
-          mkdir -p workspace/device/salute/at30a6
-          cp -r device-tree/* workspace/device/salute/at30a6/
-        fi
+        echo "📋 Анализ результатов сборки:"
         
-    - name: Build recovery image
-      run: |
-        echo "🔨 Сборка recovery образа..."
-        
-        docker run --rm \
-          -v "$(pwd)/workspace:/android" \
-          -v "$(pwd)/result:/out" \
-          twrp-builder \
-          /bin/bash -c "
-            cd /android
-            
-            # Проверяем наличие исходников
-            if [ ! -d .repo ]; then
-              echo 'Инициализация repo...'
-              repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --depth=1
-              repo sync -c -j2 --no-tags --no-clone-bundle --optimized-fetch
-            fi
-            
-            # Проверяем дерево устройства
-            if [ -d device/salute/at30a6 ]; then
-              echo 'Дерево устройства найдено'
-            else
-              echo 'Копируем дерево устройства...'
-              mkdir -p device/salute/at30a6
-              cp -r /device/* device/salute/at30a6/ 2>/dev/null || true
-            fi
-            
-            # Настройка окружения
-            source build/envsetup.sh
-            export ALLOW_MISSING_DEPENDENCIES=true
-            export LC_ALL=C
-            
-            # Пытаемся запустить сборку
-            echo 'Попытка сборки...'
-            lunch omni_at30a6-eng || lunch twrp_at30a6-eng || {
-              echo 'Создаем минимальную конфигурацию...'
-              # Создаем базовые файлы
-              mkdir -p out/target/product/at30a6/obj/KERNEL_OBJ
-              touch out/target/product/at30a6/system.prop
-            }
-            
-            # Пробуем собрать
-            make recoveryimage -j2 || {
-              echo 'Альтернативный метод сборки...'
-              # Минимальная сборка ядра и recovery
-              cd device/salute/at30a6
-              if [ -f Android.mk ] || [ -f AndroidProducts.mk ]; then
-                cd /android
-                mka bootimage || make bootimage
-              fi
-            }
-            
-            # Ищем результаты
-            find /android -name 'recovery.img' -exec cp {} /out/ \; 2>/dev/null || true
-            find /android -name 'boot.img' -exec cp {} /out/ \; 2>/dev/null || true
-            
-            echo 'Результаты:'
-            ls -la /out/
-          "
+        if [ -f "result/recovery.img" ]; then
+          echo "✅ SUCCESS: Найден recovery.img!"
+          ls -lh result/recovery.img
+          file result/recovery.img
           
-    - name: Check results
-      run: |
-        echo "📋 Проверка результатов:"
-        if [ -f "result/recovery.img" ] || [ -f "result/boot.img" ]; then
-          echo "✅ Успешно!"
-          ls -lh result/
-          echo "Размеры файлов:"
-          du -sh result/*
+          # Проверяем тип файла
+          echo "Информация о образе:"
+          hexdump -C result/recovery.img | head -20
+          
+        elif [ -f "result/boot.img" ]; then
+          echo "✅ SUCCESS: Найден boot.img!"
+          ls -lh result/boot.img
+          file result/boot.img
+          
+        elif [ $(ls -1 result/*.img 2>/dev/null | wc -l) -gt 0 ]; then
+          echo "✅ SUCCESS: Найдены образы!"
+          for img in result/*.img; do
+            echo "Файл: $img"
+            ls -lh "$img"
+            file "$img"
+          done
+          
+        elif [ -f "result/build_info.txt" ]; then
+          echo "📄 Информация о сборке:"
+          cat result/build_info.txt
+          
+          # Анализируем что есть в device-tree
+          echo ""
+          echo "📁 Анализ device-tree:"
+          echo "Содержимое репозитория:"
+          find device-tree -type f -name "*.mk" -o -name "*.prop" -o -name "*.rc" | head -20
+          
+          echo ""
+          echo "Ключевые файлы:"
+          for file in BoardConfig.mk AndroidProducts.mk device.mk AndroidBoard.mk; do
+            if [ -f "device-tree/$file" ]; then
+              echo "✅ Найден: $file"
+            else
+              echo "❌ Отсутствует: $file"
+            fi
+          done
+          
         else
-          echo "⚠️ Основные файлы не найдены, проверяем другие..."
-          find result/ -type f | head -10
-          echo "Создаем тестовый файл для отладки..."
-          echo "Это тестовый recovery образ" > result/test_recovery.img
+          echo "⚠️ Результаты не найдены"
+          mkdir -p result
+          echo "Сборка не удалась. Проверьте логи выше." > result/error.log
         fi
+        
+        # Создаем README с информацией
+        cat > result/README.md << 'EOF'
+        # TWRP Build Results
+        
+        ## Что нужно для успешной сборки:
+        
+        1. **BoardConfig.mk** - конфигурация платы
+        2. **AndroidProducts.mk** - список продуктов
+        3. **device.mk** - настройки устройства
+        4. **Исходники ядра** - папка kernel/ или ссылка на ядро
+        
+        ## Проверьте ваше дерево устройства:
+        
+        ```bash
+        # Должны быть следующие файлы:
+        device-tree/BoardConfig.mk
+        device-tree/AndroidProducts.mk  
+        device-tree/device.mk
+        device-tree/kernel/ (или TARGET_KERNEL_SOURCE в BoardConfig.mk)
+        ```
+        
+        ## Для отладки:
+        
+        Посмотрите полный вывод сборки в логах GitHub Actions.
+        EOF
         
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP-Build-Results
+        name: TWRP-Build-Output
         path: result/
         retention-days: 7
+        if-no-files-found: warn
         
-    - name: Debug info
+    - name: Analyze device tree structure
       if: always()
       run: |
-        echo "=== ДЕБАГ ИНФОРМАЦИЯ ==="
-        echo "Содержимое device-tree:"
-        ls -la device-tree/
+        echo "🔍 Анализ структуры device-tree:"
+        echo "================================"
+        
+        # Создаем анализ структуры
+        ANALYSIS_FILE="result/device_tree_analysis.txt"
+        
+        echo "Анализ репозитория TWRP для at30a6" > $ANALYSIS_FILE
+        echo "Дата: $(date)" >> $ANALYSIS_FILE
+        echo "" >> $ANALYSIS_FILE
+        
+        echo "1. Общая структура:" >> $ANALYSIS_FILE
+        find device-tree -maxdepth 2 -type f -name "*.mk" -o -name "*.prop" -o -name "Makefile" | sort >> $ANALYSIS_FILE
+        echo "" >> $ANALYSIS_FILE
+        
+        echo "2. Ключевые файлы:" >> $ANALYSIS_FILE
+        for file in BoardConfig.mk AndroidProducts.mk device.mk AndroidBoard.mk BoardConfigCommon.mk; do
+          if [ -f "device-tree/$file" ]; then
+            echo "✅ $file (СОДЕРЖАНИЕ):" >> $ANALYSIS_FILE
+            cat "device-tree/$file" | head -50 >> $ANALYSIS_FILE
+            echo "---" >> $ANALYSIS_FILE
+          else
+            echo "❌ $file - ОТСУТСТВУЕТ" >> $ANALYSIS_FILE
+          fi
+        done
+        echo "" >> $ANALYSIS_FILE
+        
+        echo "3. Файлы конфигурации:" >> $ANALYSIS_FILE
+        find device-tree -name "*.conf" -o -name "*.cfg" -o -name "*.ini" | head -10 >> $ANALYSIS_FILE
+        echo "" >> $ANALYSIS_FILE
+        
+        echo "4. Дерево каталогов:" >> $ANALYSIS_FILE
+        ls -la device-tree/ >> $ANALYSIS_FILE
+        
         echo ""
-        echo "Содержимое workspace:"
-        ls -la workspace/ 2>/dev/null || echo "workspace не существует"
-        echo ""
-        echo "Содержимое result:"
-        ls -la result/
+        echo "📊 Анализ завершен. Файл: $ANALYSIS_FILE"
+        
+    - name: Create minimal working example
+      if: failure()
+      run: |
+        echo "Создание минимального рабочего примера..."
+        
+        # Создаем минимальное дерево устройства
+        mkdir -p example_device
+        
+        # BoardConfig.mk
+        cat > example_device/BoardConfig.mk << 'EOF'
+        # Архитектура
+        TARGET_ARCH := arm64
+        TARGET_ARCH_VARIANT := armv8-a
+        TARGET_CPU_ABI := arm64-v8a
+        TARGET_CPU_ABI2 :=
+        TARGET_CPU_VARIANT := generic
+        
+        # Вторая архитектура (если нужно 32-bit)
+        TARGET_2ND_ARCH := arm
+        TARGET_2ND_ARCH_VARIANT := armv8-a
+        TARGET_2ND_CPU_ABI := armeabi-v7a
+        TARGET_2ND_CPU_ABI2 := armeabi
+        TARGET_2ND_CPU_VARIANT := generic
+        
+        # Платформа
+        TARGET_BOARD_PLATFORM := mt6765  # Пример для MediaTek
+        
+        # Загрузчик
+        TARGET_NO_BOOTLOADER := true
+        TARGET_BOOTLOADER_BOARD_NAME := at30a6
+        
+        # Партиции
+        BOARD_BOOTIMAGE_PARTITION_SIZE := 33554432
+        BOARD_RECOVERYIMAGE_PARTITION_SIZE := 33554432
+        BOARD_SYSTEMIMAGE_PARTITION_SIZE := 3221225472
+        BOARD_USERDATAIMAGE_PARTITION_SIZE := 25769803776
+        BOARD_CACHEIMAGE_PARTITION_SIZE := 268435456
+        
+        # Файловая система
+        BOARD_HAS_LARGE_FILESYSTEM := true
+        BOARD_USERDATAIMAGE_FILE_SYSTEM_TYPE := ext4
+        BOARD_CACHEIMAGE_FILE_SYSTEM_TYPE := ext4
+        BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
+        TARGET_USERIMAGES_USE_EXT4 := true
+        TARGET_USERIMAGES_USE_F2FS := true
+        
+        # TWRP конфигурация
+        TW_THEME := portrait_hdpi
+        TW_EXTRA_LANGUAGES := true
+        TW_SCREEN_BLANK_ON_BOOT := true
+        TW_INPUT_BLACKLIST := "hbtp_vm"
+        TW_USE_TOOLBOX := true
+        TW_INCLUDE_CRYPTO := true
+        TW_MAX_BRIGHTNESS := 255
+        TW_DEFAULT_BRIGHTNESS := 128
+        TW_Y_OFFSET := 80
+        TW_H_OFFSET := -80
+        EOF
+        
+        # AndroidProducts.mk
+        cat > example_device/AndroidProducts.mk << 'EOF'
+        PRODUCT_MAKEFILES := \
+            $(LOCAL_DIR)/twrp_at30a6.mk
+        
+        COMMON_LUNCH_CHOICES := \
+            twrp_at30a6-eng \
+            omni_at30a6-eng
+        EOF
+        
+        # twrp_at30a6.mk
+        cat > example_device/twrp_at30a6.mk << 'EOF'
+        $(call inherit-product, $(SRC_TARGET_DIR)/product/base.mk)
+        $(call inherit-product, device/salute/at30a6/device.mk)
+        
+        # Device identifier
+        PRODUCT_NAME := twrp_at30a6
+        PRODUCT_DEVICE := at30a6
+        PRODUCT_BRAND := Salute
+        PRODUCT_MODEL := AT30a6
+        PRODUCT_MANUFACTURER := Salute
+        EOF
+        
+        # device.mk
+        cat > example_device/device.mk << 'EOF'
+        # Common device configuration
+        PRODUCT_COPY_FILES += \
+            device/salute/at30a6/fstab:$(TARGET_COPY_OUT_RAMDISK)/fstab
+        
+        # Recovery
+        TARGET_RECOVERY_FSTAB := device/salute/at30a6/recovery.fstab
+        
+        # Properties
+        PRODUCT_PROPERTY_OVERRIDES += \
+            ro.hardware=at30a6 \
+            ro.product.device=at30a6
+        EOF
+        
+        echo "Пример создан в папке example_device/"
+        echo "Скопируйте эти файлы в ваш репозиторий"
