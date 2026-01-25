@@ -38,44 +38,44 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04  # Используем Ubuntu 24.04 напрямую
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
     - name: Display Build Info
       run: |
         echo "🧱 Building TWRP for SaluteTV (at30a6)"
-        echo "📦 Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}"
-        echo "🌲 Device Tree: ${{ github.event.inputs.DEVICE_TREE_URL }}"
+        echo "📦 Android: 13"
         echo "📁 Device: ${{ github.event.inputs.DEVICE_NAME }}"
-        echo "🛠️ Make: ${{ github.event.inputs.MAKEFILE_NAME }}-eng"
 
-    - name: Skip Kernel Updates (оптимизация)
+    - name: Fix APT Mirrors Issue
       run: |
-        # Пропускаем обновление ядра для экономии времени
-        sudo apt-mark hold linux-azure linux-image-azure linux-headers-azure
-        echo "✅ Kernel updates skipped"
+        # Удаляем проблемный файл mirrors
+        sudo rm -f /etc/apt/apt-mirrors.txt
+        # Используем стандартные репозитории
+        echo "deb http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list
+        echo "deb http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+        echo "deb http://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
 
-    - name: Install Essential Packages (Ubuntu 24.04)
+    - name: Install Minimal Packages
       run: |
-        # БЕЗ sudo apt update и upgrade - экономия времени!
+        # Только необходимые пакеты для сборки TWRP
+        sudo apt-get update
         sudo apt-get install -y \
-          bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
-          git git-lfs gnupg gperf imagemagick libncurses-dev \
-          liblz4-tool libsdl1.2-dev libssl-dev \
-          libwxgtk3.2-dev libxml2 libxml2-utils lzop m4 \
-          pngcrush python3 python3-pip repo rsync schedtool squashfs-tools \
-          xsltproc zip zlib1g-dev \
-          lib32stdc++6 lib32z1 libelf-dev \
-          openjdk-11-jdk \
+          git repo python3 python3-pip openjdk-11-jdk \
+          bc bison build-essential ccache curl flex \
+          g++-multilib gcc-multilib libncurses-dev \
+          libssl-dev libxml2-utils lzop m4 zip unzip \
           # Для 32-битной сборки
-          libc6-dev-i386 lib32gcc-s1
+          libc6-dev-i386 lib32stdc++6 lib32z1
         
-        # Устанавливаем repo tool
-        mkdir -p ~/bin
-        curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-        chmod a+x ~/bin/repo
-        sudo cp ~/bin/repo /usr/local/bin/
+        # Устанавливаем repo tool если не установлен
+        if ! command -v repo &> /dev/null; then
+          mkdir -p ~/bin
+          curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          sudo cp ~/bin/repo /usr/local/bin/
+        fi
 
     - name: Setup Workspace
       run: |
@@ -83,7 +83,6 @@ jobs:
         cd twrp-build
         echo "WORKSPACE=$(pwd)" >> $GITHUB_ENV
         
-        # Настройка git
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
         git config --global color.ui false
@@ -96,9 +95,10 @@ jobs:
                   --depth=1
 
     - name: Sync TWRP Sources
+      timeout-minutes: 30
       run: |
         cd $WORKSPACE
-        repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+        repo sync -c -j4 --force-sync --no-clone-bundle --no-tags
         echo "✅ Sources synced"
 
     - name: Clone Device Tree
@@ -112,49 +112,40 @@ jobs:
                   ${{ github.event.inputs.DEVICE_PATH }}
         echo "✅ Device tree cloned"
 
-    - name: Setup CCACHE
+    - name: Setup Build Environment
       run: |
+        cd $WORKSPACE
         export USE_CCACHE=1
         export CCACHE_EXEC=/usr/bin/ccache
-        ccache -M 20G
-        ccache -s
+        ccache -M 15G
+        echo "CCACHE enabled"
 
     - name: Build TWRP Recovery
       timeout-minutes: 60
       run: |
         cd $WORKSPACE
         
-        # Настройка окружения
+        # Setup environment
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
-        export USE_CCACHE=1
         
-        # Запуск сборки (прямой вызов mka)
+        # Build recovery
         lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng
-        mka recoveryimage -j$(nproc --all)
+        make -j$(nproc --all) recoveryimage
         
-        # Проверка результата
-        echo "📊 Build completed!"
-        echo "📁 Output files:"
-        ls -lh out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img 2>/dev/null || echo "❌ Recovery not found"
-
-    - name: Check Build Output
-      if: always()
-      run: |
-        cd $WORKSPACE
+        # Check result
         if [ -f "out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img" ]; then
-          echo "✅ SUCCESS: Recovery image built!"
-          echo "📏 Size: $(ls -lh out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img | awk '{print $5}')"
+          echo "✅ SUCCESS: Recovery built!"
+          ls -lh out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
         else
-          echo "❌ FAILED: Recovery image not found"
-          echo "🔍 Build logs:"
-          find . -name "*.log" -type f | head -5
+          echo "❌ FAILED: Recovery not found"
+          exit 1
         fi
 
     - name: Upload Recovery Image
-      if: success()
       uses: actions/upload-artifact@v4
+      if: success()
       with:
         name: twrp-salutetv-at30a6
         path: ${{ env.WORKSPACE }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
