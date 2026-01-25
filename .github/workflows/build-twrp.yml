@@ -1,65 +1,127 @@
-name: TWRP Build
-
-on: workflow_dispatch
+name: TWRP Build - WORKING VERSION
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Build with Docker (solves disk space)
+    - name: Checkout device tree
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
       run: |
-        docker run --rm -v "$(pwd):/device:ro" \
-          -v /tmp/twrp-out:/output \
-          ubuntu:22.04 /bin/bash -c "
-            apt-get update && apt-get install -y git curl python3 bc
-            curl -s https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
-            chmod +x /usr/local/bin/repo
-            
-            mkdir /twrp && cd /twrp
-            repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
-            
-            # SYNC ONLY 3 ESSENTIAL PROJECTS
-            repo sync -c -j2 \
-              platform/build \
-              bootable/recovery \
-              platform/bionic \
-              --no-tags --no-clone-bundle --optimized-fetch
-            
-            mkdir -p device/salute/at30a6
-            cp /device/BoardConfig.mk /device/device.mk device/salute/at30a6/
-            [ -d '/device/prebuilt' ] && cp -r /device/prebuilt device/salute/at30a6/
-            
-            export ALLOW_MISSING_DEPENDENCIES=true
-            export USE_LD=gold
-            source build/envsetup.sh 2>/dev/null || true
-            
-            # Direct build
-            export TARGET_DEVICE=at30a6
-            export TARGET_PRODUCT=twrp_at30a6
-            
-            make -j2 recoveryimage 2>&1 | tail -50 || make -j2 recovery 2>&1 | tail -50
-            
-            find . -name 'recovery.img' -exec cp {} /output/ \; 2>/dev/null || echo 'No recovery.img'
-          "
-    
+        sudo apt-get update
+        sudo apt-get install -y git-core gnupg flex bison gperf build-essential \
+          zip curl zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 \
+          lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
+          libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3 \
+          python3-pip openjdk-11-jdk ccache
+        
+        # Install repo tool
+        mkdir -p ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
+        source ~/.bashrc
+
+    - name: Initialize and sync
+      run: |
+        mkdir twrp && cd twrp
+        
+        # Initialize with depth=1 to save space
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
+          -b twrp-11 --depth=1
+        
+        # Create local manifest to skip large projects
+        mkdir -p .repo/local_manifests
+        cat > .repo/local_manifests/local.xml << 'EOF'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <manifest>
+          <!-- Remove heaviest projects to save space -->
+          <remove-project name="platform/prebuilts/clang/host/linux-x86" />
+          <remove-project name="platform/prebuilts/gcc/linux-x86" />
+          <remove-project name="platform/prebuilts/ndk" />
+          <remove-project name="platform/prebuilts/sdk" />
+          
+          <!-- Add our device tree -->
+          <project path="device/salute/at30a6" 
+                   name="SKOCHE/SaluteTV_at30a6_TWRP"
+                   remote="github"
+                   revision="main" />
+        </manifest>
+        EOF
+        
+        # Sync with optimized settings
+        repo sync -c -j2 \
+          --no-tags \
+          --no-clone-bundle \
+          --optimized-fetch \
+          --force-sync \
+          --fail-fast=false
+
+    - name: Build TWRP
+      run: |
+        cd twrp
+        
+        # Copy device tree files
+        mkdir -p device/salute/at30a6
+        cp -r ../*.mk ../prebuilt ../recovery device/salute/at30a6/ 2>/dev/null || true
+        
+        # Setup environment with fixes
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export LC_ALL=C
+        export USE_LD=gold
+        export BUILD_BROKEN_DUP_RULES=true
+        export BUILD_BROKEN_USES_BUILD_COPY_HEADERS=true
+        
+        source build/envsetup.sh
+        
+        # Try different product names
+        if lunch twrp_at30a6-eng 2>/dev/null; then
+          echo "Using twrp_at30a6-eng"
+        elif lunch omni_at30a6-eng 2>/dev/null; then
+          echo "Using omni_at30a6-eng"
+        else
+          # Manual setup
+          export TARGET_DEVICE=at30a6
+          export TARGET_PRODUCT=twrp_at30a6
+          export TARGET_BUILD_VARIANT=eng
+          echo "Manual setup: $TARGET_PRODUCT"
+        fi
+        
+        # Build recovery
+        make -j2 recoveryimage 2>&1 | tee build.log || {
+          echo "First attempt failed, trying recovery target..."
+          make -j2 recovery 2>&1 | tee -a build.log
+        }
+        
+        # Find and copy result
+        find out -name "recovery.img" -type f 2>/dev/null | head -1 | while read img; do
+          echo "Found recovery.img: $img"
+          cp "$img" ../recovery.img
+        done
+
     - name: Check result
       run: |
-        if [ -f "/tmp/twrp-out/recovery.img" ]; then
-          cp /tmp/twrp-out/recovery.img recovery.img
-          echo "✅ SUCCESS"
+        if [ -f "recovery.img" ]; then
+          echo "✅ SUCCESS: TWRP recovery built!"
           ls -lh recovery.img
+          echo "Size: $(wc -c < recovery.img) bytes"
         else
-          echo "❌ No recovery.img found"
+          echo "❌ FAILED: No recovery.img found"
+          echo "Build log tail:"
+          tail -50 twrp/build.log 2>/dev/null || echo "No build log"
           exit 1
         fi
-    
-    - name: Upload
+
+    - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: TWRP-Recovery
         path: recovery.img
-        if-no-files-found: error
+        retention-days: 7
