@@ -21,50 +21,67 @@ jobs:
         repository: SKOCHE/SaluteTV_at30a6_TWRP
         path: device-tree
       
-    - name: Build TWRP
+    - name: Build TWRP (Correct Docker Image)
       run: |
-        # Минимальная сборка
         mkdir -p workspace result
         
         echo "🚀 Сборка TWRP для at30a6"
         
+        # ВАЖНО: Используем образ, созданный для TWRP.
+        # Например, официальный образ от TWRP или основанный на AOSP.
         docker run --rm \
-          -v "$(pwd)/device-tree:/device-tree:ro" \
-          -v "$(pwd)/workspace:/workspace" \
-          -v "$(pwd)/result:/result" \
-          -e TWRP_BRANCH="${{ github.event.inputs.TWRP_BRANCH }}" \
-          -e DEVICE_LIST="at30a6" \
-          -e BRANCH_NAME="${{ github.event.inputs.TWRP_BRANCH }}" \
-          --entrypoint /bin/bash \
-          lineageos4microg/docker-lineage-cicd:latest \
-          -c "
-            echo '1. Проверка дерева устройств...'
-            find /device-tree -name '*.mk' | head -5
+          -v "$(pwd)/device-tree:/root/device:ro" \
+          -v "$(pwd)/workspace:/root/android" \
+          -v "$(pwd)/result:/root/out" \
+          -e TARGET_DEVICE="at30a6" \
+          -e TARGET_PRODUCT="twrp" \
+          ubuntu:22.04 \
+          /bin/bash -c "
+            # 1. Установка базовых зависимостей
+            apt-get update && apt-get install -y \
+                git-core gnupg flex bison build-essential zip curl zlib1g-dev \
+                gcc-multilib g++-multilib libc6-dev-i386 libncurses5 \
+                lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
+                libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3 \
+                repo bc imagemagick ccache schedtool rsync
             
-            echo '2. Копирование дерева устройств...'
-            mkdir -p /srv/src/device/salute/
-            cp -r /device-tree /srv/src/device/salute/at30a6
+            # 2. Переход в рабочую директорию
+            cd /root/android
             
-            echo '3. Запуск сборки...'
-            cd /srv/src
+            # 3. Инициализация репозитория TWRP
+            repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b ${{ github.event.inputs.TWRP_BRANCH }} --depth=1
             
-            # Используем скрипт из контейнера
-            source /root/new_build.sh
+            # 4. Синхронизация исходного кода
+            repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags
+            
+            # 5. Копирование дерева устройства
+            mkdir -p device/salute/
+            cp -r /root/device device/salute/at30a6
+            
+            # 6. Настройка окружения и сборка
+            source build/envsetup.sh
+            export ALLOW_MISSING_DEPENDENCIES=true
+            lunch twrp_at30a6-eng || lunch omni_at30a6-eng
+            
+            # 7. Непосредственно сборка
+            mka recoveryimage
+            
+            # 8. Копирование результата
+            cp out/target/product/at30a6/recovery.img /root/out/
           "
         
+        echo "✅ Сборка в Docker завершена."
+
     - name: Проверка результата
       run: |
-        echo "📁 Проверка workspace:"
-        find workspace -name "*.img" 2>/dev/null | head -10
-        
-        echo "📁 Проверка result:"
-        ls -la result/ 2>/dev/null || echo "result пуст"
-        
+        echo "🔍 Проверяем артефакты..."
         if [ -f "result/recovery.img" ]; then
-          echo "✅ Успех!"
+          echo "🎉 УСПЕХ! Recovery-образ найден:"
           ls -lh result/recovery.img
         else
-          echo "❌ recovery.img не найден"
+          echo "❌ ОШИБКА: Файл recovery.img не найден в result/"
+          echo "Содержимое workspace/out (если есть):"
+          find workspace -name "*.img" 2>/dev/null | head -5
           exit 1
         fi
 
@@ -72,5 +89,5 @@ jobs:
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: twrp-at30a6
+        name: twrp-salute-at30a6
         path: result/recovery.img
