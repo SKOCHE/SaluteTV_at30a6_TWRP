@@ -8,18 +8,16 @@ jobs:
     - uses: actions/checkout@v4
     - name: Setup
       run: |
-        sudo apt update && sudo apt install -y git python3 openjdk-11-jdk curl bc
+        sudo apt update
+        sudo apt install -y git python3 openjdk-11-jdk curl bc
         curl -s https://storage.googleapis.com/git-repo-downloads/repo > /tmp/repo
-        chmod +x /tmp/repo && sudo mv /tmp/repo /usr/local/bin/
+        chmod +x /tmp/repo
+        sudo mv /tmp/repo /usr/local/bin/
     - name: Build
       run: |
         mkdir twrp && cd twrp
         repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
-        
-        # Sync БЕЗ --progress
-        echo "Синхронизация (10-30 минут)..."
         repo sync -c -j2 --no-tags --no-clone-bundle
-        
         mkdir -p device/salute/at30a6
         cp ../*.mk device/salute/at30a6/
         [ -d "../prebuilt" ] && cp -r ../prebuilt device/salute/at30a6/
@@ -28,35 +26,8 @@ jobs:
         source build/envsetup.sh
         lunch twrp_at30a6-eng 2>/dev/null || export TARGET_PRODUCT=twrp_at30a6
         make -j2 recoveryimage || make -j2 recovery
-        
-        # Поиск recovery.img
-        echo "Поиск recovery.img..."
-        
-        if [ -f "out/target/product/at30a6/recovery.img" ]; then
-          cp out/target/product/at30a6/recovery.img ../recovery.img
-          echo "Найден: out/target/product/at30a6/"
-        
-        elif [ -f "out/target/product/twrp_at30a6/recovery.img" ]; then
-          cp out/target/product/twrp_at30a6/recovery.img ../recovery.img
-          echo "Найден: out/target/product/twrp_at30a6/"
-        
-        else
-          find . -name "recovery.img" -type f 2>/dev/null | head -1 | while read img; do
-            echo "Найден: $img"
-            cp "$img" ../recovery.img
-          done
-        fi
-        
-        if [ ! -f "../recovery.img" ]; then
-          echo "recovery.img не найден. Ищем любой .img:"
-          find . -name "*.img" -type f 2>/dev/null | head -3
-          echo "❌"
-          exit 1
-        else
-          echo "✅"
-          ls -lh ../recovery.img
-        fi
-    
+        find out -name "recovery.img" -exec cp {} ../recovery.img \;
+        [ -f ../recovery.img ] && echo "✅" && ls -lh ../recovery.img || (echo "❌" && exit 1)
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
