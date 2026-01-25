@@ -8,7 +8,7 @@ on:
         required: true
         default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp'
       MANIFEST_BRANCH:
-        description: 'TWRP Branch (Android 13)'
+        description: 'TWRP Branch'
         required: true
         default: 'twrp-13'
       DEVICE_TREE_URL:
@@ -20,7 +20,7 @@ on:
         required: true
         default: 'main'
       DEVICE_PATH:
-        description: 'Device Path in source'
+        description: 'Device Path'
         required: true
         default: 'device/salute/at30a6'
       DEVICE_NAME:
@@ -38,139 +38,151 @@ on:
 
 jobs:
   build:
-    if: github.event.repository.owner.id == github.event.sender.id
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # Используем Ubuntu 24.04 напрямую
     permissions:
       contents: write
     steps:
-    - name: Display Run Parameters
+    - name: Display Build Info
       run: |
-        echo "::group::Build Parameters"
-        echo "Device: SaluteTV (at30a6)"
-        echo "Manifest: ${{ github.event.inputs.MANIFEST_URL }}"
-        echo "Branch: ${{ github.event.inputs.MANIFEST_BRANCH }}"
-        echo "Device Tree: ${{ github.event.inputs.DEVICE_TREE_URL }}"
-        echo "Device Path: ${{ github.event.inputs.DEVICE_PATH }}"
-        echo "Makefile: ${{ github.event.inputs.MAKEFILE_NAME }}"
-        echo "Build Target: ${{ github.event.inputs.BUILD_TARGET }}.img"
-        echo "::endgroup::"
+        echo "🧱 Building TWRP for SaluteTV (at30a6)"
+        echo "📦 Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}"
+        echo "🌲 Device Tree: ${{ github.event.inputs.DEVICE_TREE_URL }}"
+        echo "📁 Device: ${{ github.event.inputs.DEVICE_NAME }}"
+        echo "🛠️ Make: ${{ github.event.inputs.MAKEFILE_NAME }}-eng"
 
-    - name: Check Out
-      uses: actions/checkout@v4
-
-    - name: Cleanup Workspace
-      uses: rokibhasansagar/slimhub_actions@main
-
-    - name: Prepare Environment
+    - name: Skip Kernel Updates (оптимизация)
       run: |
-        sudo apt update
-        sudo apt -y upgrade
-        sudo apt -y install gperf gcc-multilib g++-multilib libc6-dev lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z-dev libgl1-mesa-dev libxml2-utils xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libxml2 lzop pngcrush schedtool squashfs-tools imagemagick libbz2-dev lzma ncftp libstdc++-10-dev libncurses5 python3 python-is-python3 flex bison repo
+        # Пропускаем обновление ядра для экономии времени
+        sudo apt-mark hold linux-azure linux-image-azure linux-headers-azure
+        echo "✅ Kernel updates skipped"
 
-    - name: Install OpenJDK 11 (для Android 13)
-      uses: actions/setup-java@v3
-      with:
-        distribution: 'temurin'
-        java-version: '11'
-
-    - name: Setup SSH Keys (если нужно)
-      if: ${{ startsWith(github.event.inputs.MANIFEST_URL, 'git@github.com') }}
-      uses: webfactory/ssh-agent@v0.9.0
-      with:
-        ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-
-    - name: Initialize Repo
+    - name: Install Essential Packages (Ubuntu 24.04)
       run: |
+        # БЕЗ sudo apt update и upgrade - экономия времени!
+        sudo apt-get install -y \
+          bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
+          git git-lfs gnupg gperf imagemagick libncurses-dev \
+          liblz4-tool libsdl1.2-dev libssl-dev \
+          libwxgtk3.2-dev libxml2 libxml2-utils lzop m4 \
+          pngcrush python3 python3-pip repo rsync schedtool squashfs-tools \
+          xsltproc zip zlib1g-dev \
+          lib32stdc++6 lib32z1 libelf-dev \
+          openjdk-11-jdk \
+          # Для 32-битной сборки
+          libc6-dev-i386 lib32gcc-s1
+        
+        # Устанавливаем repo tool
         mkdir -p ~/bin
         curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
-        sudo ln -sf ~/bin/repo /usr/bin/repo
-        
-        mkdir workspace
-        cd workspace
-        echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
-        
-        git config --global user.name "SKOCHE"
-        git config --global user.email "github-actions@github.com"
-        repo init --depth=1 -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }} --git-lfs
-      id: workspace
+        sudo cp ~/bin/repo /usr/local/bin/
 
-    - name: Repo Sync
+    - name: Setup Workspace
       run: |
+        mkdir -p twrp-build
+        cd twrp-build
+        echo "WORKSPACE=$(pwd)" >> $GITHUB_ENV
+        
+        # Настройка git
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        git config --global color.ui false
+
+    - name: Initialize TWRP Manifest
+      run: |
+        cd $WORKSPACE
+        repo init -u ${{ github.event.inputs.MANIFEST_URL }} \
+                  -b ${{ github.event.inputs.MANIFEST_BRANCH }} \
+                  --depth=1
+
+    - name: Sync TWRP Sources
+      run: |
+        cd $WORKSPACE
         repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
-      working-directory: ${{ steps.workspace.outputs.workspace-folder }}
+        echo "✅ Sources synced"
 
     - name: Clone Device Tree
       run: |
+        cd $WORKSPACE
+        echo "🌲 Cloning device tree..."
         rm -rf ${{ github.event.inputs.DEVICE_PATH }}
-        git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} --depth=1 ./${{ github.event.inputs.DEVICE_PATH }}
-      working-directory: ${{ steps.workspace.outputs.workspace-folder }}
+        git clone ${{ github.event.inputs.DEVICE_TREE_URL }} \
+                  -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} \
+                  --depth=1 \
+                  ${{ github.event.inputs.DEVICE_PATH }}
+        echo "✅ Device tree cloned"
 
-    - name: Set Swap Space (16GB для компиляции)
-      uses: pierotofy/set-swap-space@master
-      with:
-        swap-size-gb: 16
-
-    - name: Build TWRP Recovery
+    - name: Setup CCACHE
       run: |
-        cd ${{ steps.workspace.outputs.workspace-folder }}
-        source build/envsetup.sh
-        
-        # Экспортируем переменные для Amlogic 32-bit
-        export ALLOW_MISSING_DEPENDENCIES=true
-        export LC_ALL=C
         export USE_CCACHE=1
         export CCACHE_EXEC=/usr/bin/ccache
         ccache -M 20G
-        
-        lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng
-        make clean
-        make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
-        
-        # Проверяем размеры файлов
-        echo "::group::Build Output"
-        ls -lh out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.img
-        echo "::endgroup::"
-      env:
-        CCACHE_DIR: /tmp/ccache
+        ccache -s
 
-    - name: Upload Recovery to Artifacts
+    - name: Build TWRP Recovery
+      timeout-minutes: 60
+      run: |
+        cd $WORKSPACE
+        
+        # Настройка окружения
+        source build/envsetup.sh
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export LC_ALL=C
+        export USE_CCACHE=1
+        
+        # Запуск сборки (прямой вызов mka)
+        lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng
+        mka recoveryimage -j$(nproc --all)
+        
+        # Проверка результата
+        echo "📊 Build completed!"
+        echo "📁 Output files:"
+        ls -lh out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img 2>/dev/null || echo "❌ Recovery not found"
+
+    - name: Check Build Output
+      if: always()
+      run: |
+        cd $WORKSPACE
+        if [ -f "out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img" ]; then
+          echo "✅ SUCCESS: Recovery image built!"
+          echo "📏 Size: $(ls -lh out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img | awk '{print $5}')"
+        else
+          echo "❌ FAILED: Recovery image not found"
+          echo "🔍 Build logs:"
+          find . -name "*.log" -type f | head -5
+        fi
+
+    - name: Upload Recovery Image
+      if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: twrp-at30a6-recovery
-        path: ${{ steps.workspace.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
-        retention-days: 7
+        name: twrp-salutetv-at30a6
+        path: ${{ env.WORKSPACE }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
+        retention-days: 30
 
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
       if: success()
+      uses: ncipollo/release-action@v1
       with:
-        files: ${{ steps.workspace.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
-        name: "TWRP for SaluteTV (at30a6) - Build #${{ github.run_number }}"
-        tag_name: "v${{ github.run_number }}"
+        artifacts: ${{ env.WORKSPACE }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
+        name: "TWRP for SaluteTV (at30a6)"
+        tag: "build-${{ github.run_number }}"
         body: |
-          ## TWRP Recovery for SaluteTV (at30a6)
+          ### 📱 TWRP Recovery for SaluteTV (at30a6)
           
-          **Device:** SaluteTV (codename: at30a6)
-          **Android:** 13 (SDK 33)
-          **Architecture:** ARM 32-bit (armeabi-v7a)
-          **Platform:** Amlogic
+          **Device:** SaluteTV  
+          **Codename:** at30a6  
+          **Android:** 13  
+          **Architecture:** ARM 32-bit  
           
-          **Build Info:**
-          - Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}
-          - Device Tree: ${{ github.event.inputs.DEVICE_TREE_BRANCH }}
-          - Build Date: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
-          
-          **Installation:**
+          ### 📦 Installation
           ```bash
           fastboot flash recovery recovery.img
           fastboot flash dtbo dtbo.img
           fastboot reboot recovery
           ```
           
-          **Notes:**
-          - Tested on SaluteTV with firmware v1.100.61-b23081
-          - Supports FBE encryption
-          - Includes Amlogic-specific drivers
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ### 🔧 Build Info
+          - **Build Date:** $(date -u +'%Y-%m-%d %H:%M UTC')
+          - **Workflow:** #${{ github.run_number }}
+        token: ${{ secrets.GITHUB_TOKEN }}
