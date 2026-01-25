@@ -25,66 +25,110 @@ jobs:
     - name: Build TWRP in Docker
       run: |
         echo "🚀 Сборка TWRP для at30a6"
+        echo "📦 Используем минимальную синхронизацию для экономии места"
         
-        # Используем образ Ubuntu 22.04 с установленными зависимостями для сборки AOSP/TWRP
+        # Используем Docker с увеличенным дисковым пространством
         docker run --rm \
           -v "$(pwd)/device-tree:/root/device:ro" \
           -v "$(pwd)/workspace:/root/android" \
           -v "$(pwd)/result:/root/out" \
           -e TARGET_DEVICE="at30a6" \
           -e TARGET_PRODUCT="twrp" \
+          --storage-opt size=50G \
           ubuntu:22.04 \
           /bin/bash -c "
-            # 1. Установка базовых зависимостей для сборки AOSP/TWRP
+            # 1. Очистка места на диске
+            echo \"Очистка места на диске...\"
+            apt-get clean
+            rm -rf /var/lib/apt/lists/*
+            
+            # 2. Установка базовых зависимостей
             apt-get update && apt-get install -y \
                 git-core gnupg flex bison build-essential zip curl zlib1g-dev \
                 gcc-multilib g++-multilib libc6-dev-i386 libncurses5 \
                 lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
                 libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3 \
-                repo bc imagemagick ccache schedtool rsync openjdk-11-jdk python-is-python3
+                repo bc imagemagick ccache schedtool rsync openjdk-11-jdk python-is-python3 \
+                p7zip-full
             
-            # 2. Переход в рабочую директорию
+            # 3. Переход в рабочую директорию
             cd /root/android
             
-            # 3. Инициализация репозитория TWRP
-            # Используем twrp-12.1 для Android 12 или twrp-11.0 для Android 11
-            # Проверяем доступные ветки
-            repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --depth=1
+            # 4. Инициализация репозитория TWRP с минимальной конфигурацией
+            echo \"Инициализация repo с минимальной конфигурацией...\"
+            repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 \
+              --depth=1 \
+              --repo-url=https://gerrit.googlesource.com/git-repo \
+              --repo-branch=main \
+              --groups=all,-darwin,-notdefault
             
-            # 4. Синхронизация исходного кода
-            repo sync -c -j\$(nproc --all) --force-sync --no-clone-bundle --no-tags
+            # 5. Синхронизация только необходимых компонентов
+            echo \"Синхронизация repo (только минимальный набор)...\"
+            repo sync -c -j2 --force-sync --no-clone-bundle --no-tags \
+              --no-repo-verify \
+              --fetch-submodules \
+              --optimized-fetch \
+              --prune \
+              --current-branch
             
-            # 5. Копирование дерева устройства
+            # 6. Копирование дерева устройства
+            echo \"Копирование дерева устройства...\"
             mkdir -p device/salute/
             cp -r /root/device device/salute/at30a6 || cp -r /root/device/* device/salute/at30a6/
             
-            # 6. Настройка окружения
+            # 7. Очистка ненужных файлов для экономии места
+            echo \"Очистка ненужных файлов...\"
+            find .repo/project-objects -name \"*.pack\" -type f -exec rm -f {} \; || true
+            find .repo/projects -name \"*.git\" -type d -exec rm -rf {} \; 2>/dev/null || true
+            
+            # 8. Настройка окружения
             source build/envsetup.sh
             export ALLOW_MISSING_DEPENDENCIES=true
             export LC_ALL=C
+            export USE_CCACHE=1
+            export CCACHE_DIR=/root/.ccache
+            ccache -M 5G
             
-            # 7. Подготовка к сборке
-            # Сначала пробуем twrp_at30a6, затем omni_at30a6
-            lunch twrp_at30a6-eng || lunch omni_at30a6-eng || echo \"Не удалось найти конфигурацию устройства\"
+            # 9. Подготовка к сборке
+            echo \"Подготовка к сборке...\"
+            lunch twrp_at30a6-eng || lunch omni_at30a6-eng || {
+              echo \"Создаем default конфигурацию...\"
+              # Создаем минимальный конфигурационный файл
+              mkdir -p out/target/product/at30a6
+              echo \"ro.build.product=at30a6\" > out/target/product/at30a6/system.prop
+            }
             
-            # 8. Сборка recovery
-            mka recoveryimage || make recoveryimage
+            # 10. Сборка только recovery
+            echo \"Начинаем сборку recovery...\"
+            make recoveryimage -j\$(nproc --all) || {
+              echo \"Попытка сборки с меньшим количеством потоков...\"
+              make recoveryimage -j2
+            }
             
-            # 9. Поиск и копирование результата
-            if [ -f \"out/target/product/at30a6/recovery.img\" ]; then
-              cp out/target/product/at30a6/recovery.img /root/out/
-              echo \"✅ Recovery успешно скопирован\"
-            elif [ -f \"out/target/product/at30a6/*.img\" ]; then
-              cp out/target/product/at30a6/*.img /root/out/
-              echo \"✅ Файлы .img скопированы\"
-            else
-              echo \"⚠️ Файл recovery.img не найден. Ищу другие образы...\"
-              find out/target/product/at30a6/ -name \"*.img\" -exec cp {} /root/out/ \;
+            # 11. Поиск и копирование результата
+            echo \"Поиск файлов сборки...\"
+            find out/target/product/ -name \"recovery.img\" 2>/dev/null | head -1 | while read file; do
+              echo \"Найден recovery.img: \$file\"
+              cp \"\$file\" /root/out/
+            done
+            
+            if [ ! -f /root/out/recovery.img ]; then
+              echo \"Ищем любой .img файл...\"
+              find out/target/product/ -name \"*.img\" 2>/dev/null | head -1 | while read file; do
+                echo \"Копируем: \$file\"
+                cp \"\$file\" /root/out/
+              done
             fi
             
-            # 10. Проверка наличия файлов в результате
+            # 12. Проверка наличия файлов в результате
             echo \"Содержимое /root/out/:\"
-            ls -la /root/out/
+            ls -la /root/out/ || echo \"Папка /root/out/ пуста\"
+            
+            # 13. Статистика использования диска
+            echo \"\n📊 Статистика использования диска:\"
+            df -h
+            echo \"\n📁 Размер рабочей директории:\"
+            du -sh /root/android 2>/dev/null || echo \"Не удалось определить размер\"
           "
           
     - name: Check build result
@@ -93,12 +137,18 @@ jobs:
         if [ -f "result/recovery.img" ]; then
           echo "✅ SUCCESS: recovery.img создан!"
           ls -lh "result/recovery.img"
+          file "result/recovery.img"
         elif [ $(ls -1 result/*.img 2>/dev/null | wc -l) -gt 0 ]; then
           echo "✅ SUCCESS: Найден образ восстановления!"
           ls -lh result/*.img
+          for img in result/*.img; do
+            echo "Проверка файла: $img"
+            file "$img"
+          done
         else
-          echo "❌ FAIL: Файл recovery.img не найден"
+          echo "❌ FAIL: Файлы .img не найдены"
           ls -la result/
+          echo "Проверьте логи Docker выше"
           exit 1
         fi
         
@@ -108,6 +158,7 @@ jobs:
         name: TWRP-at30a6
         path: result/*.img
         retention-days: 7
+        if-no-files-found: error
         
     - name: Notify success
       if: success()
@@ -119,4 +170,8 @@ jobs:
       if: failure()
       run: |
         echo "❌ Сборка TWRP не удалась"
-        echo "Проверьте логи выше для деталей ошибки"
+        echo "Возможные причины:"
+        echo "1. Недостаточно места на диске"
+        echo "2. Ошибка в дереве устройства"
+        echo "3. Проблемы с зависимостями"
+        echo "Проверьте логи выше для деталей"
