@@ -28,7 +28,7 @@ jobs:
         sudo mv ~/repo /usr/local/bin/
         repo version
     
-    - name: Initialize and build
+    - name: Initialize and sync FULL TWRP
       env:
         ALLOW_MISSING_DEPENDENCIES: true
         LC_ALL: C
@@ -36,29 +36,67 @@ jobs:
       run: |
         mkdir twrp && cd twrp
         
-        # Minimal init
+        # Initialize with minimal manifest
         repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
           -b twrp-11 --depth=1
         
-        # Sync only required
-        repo sync -c -j2 --no-tags --no-clone-bundle \
-          platform/build \
-          platform/bionic \
-          platform/system/core \
-          bootable/recovery
+        # SYNC EVERYTHING - no specific projects
+        repo sync -c -j2 --no-tags --no-clone-bundle --force-sync
         
         # Copy device tree
         mkdir -p device/salute/at30a6
-        cp -r ../* device/salute/at30a6/ 2>/dev/null || true
+        cp -r ../*.mk ../prebuilt ../recovery device/salute/at30a6/ 2>/dev/null || true
+        cp ../BoardConfig.mk device/salute/at30a6/ 2>/dev/null || true
+        cp ../device.mk device/salute/at30a6/ 2>/dev/null || true
+        
+        echo "Device tree copied:"
+        ls -la device/salute/at30a6/
+    
+    - name: Build TWRP
+      env:
+        ALLOW_MISSING_DEPENDENCIES: true
+        LC_ALL: C
+        USE_LD: gold
+      run: |
+        cd twrp
         
         # Build
         source build/envsetup.sh
-        export TARGET_DEVICE=at30a6
-        export TARGET_PRODUCT=omni_at30a6
-        make -j2 recoveryimage 2>&1 | tee build.log
         
-        # Copy result
-        find out -name "recovery.img" -exec cp {} ../recovery.img \;
+        # Try different product names
+        if lunch omni_at30a6-eng 2>/dev/null; then
+          echo "Using omni_at30a6-eng"
+        elif lunch twrp_at30a6-eng 2>/dev/null; then
+          echo "Using twrp_at30a6-eng"
+        else
+          # Manual setup
+          export TARGET_DEVICE=at30a6
+          export TARGET_PRODUCT=omni_at30a6
+          export TARGET_BUILD_VARIANT=eng
+          echo "Manual: TARGET_PRODUCT=$TARGET_PRODUCT"
+        fi
+        
+        # Build recovery
+        make -j2 recoveryimage 2>&1 | tee build.log || {
+          echo "First attempt failed, trying recovery target..."
+          make -j2 recovery 2>&1 | tee -a build.log
+        }
+        
+        # Find and copy result
+        find out -name "recovery.img" -type f 2>/dev/null | head -1 | while read img; do
+          echo "Found: $img"
+          cp "$img" ../recovery.img
+        done
+        
+        if [ -f "../recovery.img" ]; then
+          echo "SUCCESS: recovery.img created"
+          ls -lh ../recovery.img
+        else
+          echo "ERROR: No recovery.img found"
+          echo "Last 20 lines of build.log:"
+          tail -20 build.log
+          exit 1
+        fi
     
     - name: Upload result
       uses: actions/upload-artifact@v4
@@ -66,3 +104,15 @@ jobs:
         name: TWRP-Recovery
         path: recovery.img
         if-no-files-found: error
+    
+    - name: Create release
+      if: success() && github.event_name == 'workflow_dispatch'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: recovery.img
+        tag_name: twrp-$(date +%Y%m%d-%H%M%S)
+        name: "TWRP Recovery"
+        body: |
+          TWRP for SaluteTV at30a6
+          Built: $(date)
+        draft: false
