@@ -38,52 +38,87 @@ jobs:
         
         echo "🚀 Starting TWRP build in Docker..."
         
+        # Устанавливаем переменные окружения
+        export DEBUG_LOG=false
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export LC_ALL=C
+        
         # Переходим в workspace
         cd /workspace
         
         # Инициализируем TWRP sources
         echo "📦 Initializing TWRP manifest..."
         repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp \
-                  -b $TWRP_BRANCH \
+                  -b "$TWRP_BRANCH" \
                   --depth=1
         
         echo "🔄 Syncing sources..."
-        repo sync -c -j4 --force-sync --no-clone-bundle --no-tags
+        repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags
         
         # Копируем device tree
         echo "🌲 Copying device tree..."
         mkdir -p device/salute/
-        cp -r /device-tree/device/salute/at30a6 device/salute/
+        if [ -d "/device-tree/device/salute/at30a6" ]; then
+          cp -r /device-tree/device/salute/at30a6 device/salute/
+        elif [ -d "/device-tree" ]; then
+          # Попробуем найти дерево устройств в другой структуре
+          find /device-tree -name "*.mk" -o -name "AndroidProducts.mk" | head -5
+          echo "Looking for device tree structure..."
+          find /device-tree -type d -name "at30a6" | head -3
+        fi
         
         # Проверяем структуру
         echo "🔍 Checking device tree..."
+        if [ ! -f "device/salute/at30a6/AndroidProducts.mk" ]; then
+          echo "⚠️  AndroidProducts.mk not found, checking for other files..."
+          find device/salute/at30a6/ -type f 2>/dev/null || echo "Device directory not found"
+        fi
+        
         if [ ! -f "device/salute/at30a6/BoardConfig.mk" ]; then
           echo "❌ ERROR: BoardConfig.mk not found!"
-          find device/salute/at30a6/ -type f
+          echo "Searching in workspace..."
+          find . -name "BoardConfig.mk" 2>/dev/null | head -10
           exit 1
         fi
         
         # Настраиваем окружение
         echo "⚙️ Setting up build environment..."
         source build/envsetup.sh
-        export ALLOW_MISSING_DEPENDENCIES=true
-        export LC_ALL=C
         
         # Собираем
         echo "🔨 Building recovery..."
-        lunch twrp_at30a6-eng
-        make -j$(nproc) recoveryimage
+        # Пробуем разные варианты lunch
+        if lunch twrp_at30a6-eng; then
+          echo "✅ Lunch command successful"
+        elif lunch omni_at30a6-eng; then
+          echo "✅ Lunch command successful (omni)"
+        else
+          echo "⚠️  Standard lunch failed, trying to set manually..."
+          export TARGET_DEVICE=at30a6
+        fi
+        
+        # Собираем recovery
+        echo "🛠️  Making recoveryimage..."
+        mka recoveryimage 2>&1 | tee build.log || {
+          echo "❌ Build failed!"
+          tail -50 build.log
+          exit 1
+        }
         
         # Проверяем результат
+        echo "🔎 Checking build result..."
         if [ -f "out/target/product/at30a6/recovery.img" ]; then
           echo "✅ SUCCESS! Recovery built."
           ls -lh out/target/product/at30a6/recovery.img
           
           # Копируем результат
+          mkdir -p /result
           cp out/target/product/at30a6/recovery.img /result/
+          echo "📋 Copied to /result/"
         else
-          echo "❌ ERROR: Recovery not found!"
-          find out/target/product/at30a6/ -name "*.img" 2>/dev/null || true
+          echo "⚠️  Recovery not found in standard location, searching..."
+          find out/target/product/ -name "recovery.img" 2>/dev/null || true
+          find out/target/product/ -name "*.img" 2>/dev/null | head -10
           exit 1
         fi
         EOF
@@ -95,25 +130,35 @@ jobs:
         # Создаем директории
         mkdir -p workspace result
         
-        # Запускаем Docker контейнер
+        echo "🐳 Starting Docker build with TWRP_BRANCH=${{ github.event.inputs.TWRP_BRANCH }}"
+        
+        # Запускаем Docker контейнер с исправленной командой
         docker run --rm \
-          -v $(pwd)/device-tree:/device-tree:ro \
-          -v $(pwd)/workspace:/workspace \
-          -v $(pwd)/result:/result \
+          -v "$(pwd)/device-tree:/device-tree:ro" \
+          -v "$(pwd)/workspace:/workspace" \
+          -v "$(pwd)/result:/result" \
+          -v "$(pwd)/build.sh:/github/workspace/build.sh:ro" \
           -e TWRP_BRANCH="${{ github.event.inputs.TWRP_BRANCH }}" \
+          -e DEBUG_LOG="false" \
           lineageos4microg/docker-lineage-cicd:latest \
-          /bin/bash -c "/github/workspace/build.sh"
+          /bin/bash -c "cd / && /github/workspace/build.sh"
         
         echo "🏁 Docker build completed"
 
     - name: Check Build Result
       run: |
+        echo "🔍 Checking build artifacts..."
+        ls -la result/ 2>/dev/null || echo "Result directory not found"
+        
         if [ -f "result/recovery.img" ]; then
           echo "✅ Recovery image found!"
           ls -lh result/recovery.img
           echo "📏 Size: $(stat -c%s result/recovery.img) bytes"
+          echo "📊 MD5: $(md5sum result/recovery.img | cut -d' ' -f1)"
         else
-          echo "❌ No recovery image found"
+          echo "❌ No recovery image found in result/"
+          echo "Checking workspace..."
+          find workspace -name "recovery.img" 2>/dev/null || true
           exit 1
         fi
 
