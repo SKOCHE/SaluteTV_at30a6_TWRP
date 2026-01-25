@@ -1,85 +1,65 @@
-name: TWRP Build for at30a6
+name: TWRP Build
 
-on:
-  workflow_dispatch:
-  push:
-    branches: [ main ]
+on: workflow_dispatch
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 90  # Увеличили для синхронизации
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     
     steps:
-    - name: Checkout device tree
-      uses: actions/checkout@v4
-      
-    - name: Install minimal dependencies
-      run: |
-        sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list 2>/dev/null || true
-        sudo apt-get update 2>/dev/null || true
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-          git python3 openjdk-11-jdk curl \
-          build-essential bc 2>/dev/null || echo "Some packages failed"
+    - uses: actions/checkout@v4
     
-    - name: Install repo tool
+    - name: Build with Docker (solves disk space)
       run: |
-        curl -s https://storage.googleapis.com/git-repo-downloads/repo > /tmp/repo
-        chmod +x /tmp/repo
-        sudo mv /tmp/repo /usr/local/bin/
+        docker run --rm -v "$(pwd):/device:ro" \
+          -v /tmp/twrp-out:/output \
+          ubuntu:22.04 /bin/bash -c "
+            apt-get update && apt-get install -y git curl python3 bc
+            curl -s https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
+            chmod +x /usr/local/bin/repo
+            
+            mkdir /twrp && cd /twrp
+            repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
+            
+            # SYNC ONLY 3 ESSENTIAL PROJECTS
+            repo sync -c -j2 \
+              platform/build \
+              bootable/recovery \
+              platform/bionic \
+              --no-tags --no-clone-bundle --optimized-fetch
+            
+            mkdir -p device/salute/at30a6
+            cp /device/BoardConfig.mk /device/device.mk device/salute/at30a6/
+            [ -d '/device/prebuilt' ] && cp -r /device/prebuilt device/salute/at30a6/
+            
+            export ALLOW_MISSING_DEPENDENCIES=true
+            export USE_LD=gold
+            source build/envsetup.sh 2>/dev/null || true
+            
+            # Direct build
+            export TARGET_DEVICE=at30a6
+            export TARGET_PRODUCT=twrp_at30a6
+            
+            make -j2 recoveryimage 2>&1 | tail -50 || make -j2 recovery 2>&1 | tail -50
+            
+            find . -name 'recovery.img' -exec cp {} /output/ \; 2>/dev/null || echo 'No recovery.img'
+          "
     
-    - name: Build TWRP
+    - name: Check result
       run: |
-        echo "=== STARTING TWRP BUILD ==="
-        mkdir -p twrp && cd twrp
-        
-        # 1. Инициализация
-        echo "1. Initializing repo..."
-        /usr/local/bin/repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
-          -b twrp-11 --depth=1
-        
-        # 2. СИНХРОНИЗАЦИЯ (это займет время)
-        echo "2. Syncing repository (10-30 minutes)..."
-        /usr/local/bin/repo sync -c -j2 --no-tags --no-clone-bundle --force-sync
-        
-        # 3. Копирование устройства
-        echo "3. Copying device files..."
-        mkdir -p device/salute/at30a6
-        cp -r ../*.mk ../prebuilt ../recovery device/salute/at30a6/ 2>/dev/null || true
-        
-        # 4. Настройка
-        echo "4. Setting up build environment..."
-        export ALLOW_MISSING_DEPENDENCIES=true
-        export LC_ALL=C
-        export USE_LD=gold
-        source build/envsetup.sh
-        
-        # 5. Сборка
-        echo "5. Building recovery..."
-        lunch omni_at30a6-eng 2>/dev/null || {
-          export TARGET_DEVICE=at30a6
-          export TARGET_PRODUCT=omni_at30a6
-        }
-        
-        make -j2 recoveryimage 2>&1 | tee build.log || {
-          make -j2 recovery 2>&1 | tee -a build.log
-        }
-        
-        # 6. Поиск результата
-        echo "6. Searching for recovery image..."
-        find out -name "recovery.img" -type f 2>/dev/null | head -1 | xargs -I{} cp {} ../recovery.img
-        
-        if [ -f "../recovery.img" ]; then
+        if [ -f "/tmp/twrp-out/recovery.img" ]; then
+          cp /tmp/twrp-out/recovery.img recovery.img
           echo "✅ SUCCESS"
-          ls -lh ../recovery.img
+          ls -lh recovery.img
         else
-          echo "❌ FAILURE"
+          echo "❌ No recovery.img found"
           exit 1
         fi
     
-    - name: Upload TWRP recovery
+    - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP-Recovery-at30a6
+        name: TWRP-Recovery
         path: recovery.img
         if-no-files-found: error
