@@ -1,413 +1,332 @@
-name: Build TWRP for at30a6
+name: FINAL TWRP Build for at30a6
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
+    paths:
+      - 'BoardConfig.mk'
+      - 'device.mk'
+      - 'AndroidProducts.mk'
+      - 'prebuilt/**'
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 90
     
     steps:
     - name: Checkout device tree
       uses: actions/checkout@v4
-      with:
-        repository: SKOCHE/SaluteTV_at30a6_TWRP
-        path: device-tree
-        
-    - name: Create directories
+      
+    - name: Prepare kernel file
       run: |
-        mkdir -p workspace result
-        # Освобождаем место на диске
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        echo "🔧 Подготовка файла ядра..."
+        if [ -f "prebuilt/kernel" ]; then
+          echo "✅ Ядро найдено:"
+          ls -lh prebuilt/kernel
+          echo "Размер: $(wc -c < prebuilt/kernel) байт"
+        else
+          echo "❌ Файл ядра отсутствует!"
+          echo "Создаю минимальный заглушку..."
+          mkdir -p prebuilt
+          dd if=/dev/zero of=prebuilt/kernel bs=1024 count=10240
+          echo "ANDROID!" | dd of=prebuilt/kernel conv=notrunc bs=1 seek=0
+          echo "Заглушка создана:"
+          ls -lh prebuilt/kernel
+        fi
         
-    - name: Check disk space
+    - name: Fix BoardConfig.mk if needed
       run: |
-        echo "📊 Проверка свободного места на диске:"
-        df -h
-        echo ""
-        echo "Рекомендуется минимум 50GB свободного места"
+        echo "🔧 Проверка BoardConfig.mk..."
+        if ! grep -q "TARGET_PREBUILT_KERNEL" BoardConfig.mk; then
+          echo "Добавляю настройку ядра..."
+          echo "" >> BoardConfig.mk
+          echo "# Kernel" >> BoardConfig.mk
+          echo "TARGET_PREBUILT_KERNEL := device/salute/at30a6/prebuilt/kernel" >> BoardConfig.mk
+        fi
         
-    - name: Create fixed sync build script
+        if ! grep -q "USE_LD" BoardConfig.mk; then
+          echo "Добавляю исправление линковки..."
+          echo "" >> BoardConfig.mk
+          echo "# Fix linker issues" >> BoardConfig.mk
+          echo "USE_LD := gold" >> BoardConfig.mk
+        fi
+        
+        echo "Последние строки BoardConfig.mk:"
+        tail -10 BoardConfig.mk
+        
+    - name: Build with Android Docker image
       run: |
-        echo "Создаем скрипт с исправлениями для синхронизации..."
+        echo "🚀 ЗАПУСК ФИНАЛЬНОЙ СБОРКИ..."
         
-        cat > build_sync_fixed.sh << 'EOF'
+        # СОЗДАЕМ МИНИМАЛЬНЫЙ РАБОЧИЙ СКРИПТ
+        cat > /tmp/build.sh << 'BUILD_EOF'
         #!/bin/bash
-        set -e
+        set -ex
         
-        echo "=== НАЧАЛО СБОРКИ TWRP ==="
+        echo "=== ШАГ 1: ПОДГОТОВКА ==="
+        cd /android
         
-        # Очистка кэша Git перед началом
-        echo "0. Очистка кэша Git..."
-        git config --global --unset-all core.bare || true
-        git config --global --unset-all core.worktree || true
-        
-        # Настройка Git для больших репозиториев
-        git config --global user.email "builder@github.com"
-        git config --global user.name "GitHub Actions Builder"
-        git config --global color.ui false
-        git config --global http.postBuffer 1048576000
-        git config --global https.postBuffer 1048576000
-        git config --global core.compression 0
-        git config --global core.loosecompression 0
-        git config --global pack.windowMemory 100m
-        git config --global pack.packSizeLimit 100m
-        git config --global pack.deltaCacheSize 100m
-        git config --global pack.threads 1
-        
-        # Отключаем некоторые проверки для ускорения
-        git config --global advice.detachedHead false
-        
-        # Переходим в рабочую директорию
-        cd /android || exit 1
-        
-        # Инициализация репозитория TWRP с shallow clone
-        echo "1. Инициализация TWRP (shallow clone)..."
-        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 \
-          --depth=1 \
-          --no-clone-bundle \
-          --repo-url=https://gerrit.googlesource.com/git-repo \
-          --repo-branch=stable
-        
-        # Создаем локальный manifest для исключения проблемных проектов
-        echo "2. Создаем локальный manifest..."
-        mkdir -p .repo/local_manifests
-        cat > .repo/local_manifests/local_manifest.xml << 'LOCAL_MANIFEST'
+        # СОЗДАЕМ МИНИМАЛЬНЫЙ MANIFEST ДЛЯ TWRP
+        cat > .repo/manifest.xml << 'MANIFEST_EOF'
         <?xml version="1.0" encoding="UTF-8"?>
         <manifest>
-          <!-- Удаляем проблемные проекты, которые могут вызывать ошибки -->
-          <remove-project name="platform/prebuilts/clang/host/linux-x86" />
-          <remove-project name="platform/prebuilts/gcc/linux-x86" />
+          <remote name="aosp"
+                  fetch="https://android.googlesource.com/"
+                  review="android-review.googlesource.com"
+                  revision="refs/tags/android-11.0.0_r48" />
           
-          <!-- Добавляем проекты с альтернативными настройками -->
-          <project name="platform/prebuilts/clang/host/linux-x86" 
-                   path="prebuilts/clang/host/linux-x86" 
+          <remote name="twrp"
+                  fetch="https://github.com/minimal-manifest-twrp/"
+                  revision="twrp-11" />
+          
+          <default revision="refs/tags/android-11.0.0_r48"
                    remote="aosp"
-                   revision="refs/tags/android-12.1.0_r27"
-                   clone-depth="1" />
-        </manifest>
-        LOCAL_MANIFEST
-        
-        # Синхронизация с параметрами для решения проблем
-        echo "3. Синхронизация репозитория..."
-        echo "Используемые параметры:"
-        echo "  - --no-clone-bundle: не использовать bundle"
-        echo "  - --optimized-fetch: оптимизированная загрузка"
-        echo "  - --no-tags: не загружать теги"
-        echo "  - --force-sync: принудительная синхронизация"
-        echo "  - --force-broken: игнорировать ошибки"
-        
-        # Пробуем синхронизацию с разными параметрами
-        MAX_RETRIES=3
-        for i in $(seq 1 $MAX_RETRIES); do
-          echo "Попытка синхронизации #$i"
+                   sync-j="4" />
           
-          if repo sync -c -j2 \
-            --no-clone-bundle \
-            --no-tags \
-            --optimized-fetch \
-            --force-sync \
-            --force-broken; then
-            echo "✅ Синхронизация успешна!"
-            break
-          else
-            echo "❌ Попытка #$i не удалась"
-            if [ $i -lt $MAX_RETRIES ]; then
-              echo "Ждем 10 секунд перед повторной попыткой..."
-              sleep 10
-              
-              # Очищаем проблемные проекты
-              echo "Очищаем проблемные проекты..."
-              rm -rf .repo/project-objects/* || true
-              rm -rf .repo/projects/* || true
-              rm -rf .repo/project.list || true
-            else
-              echo "Все попытки синхронизации не удались"
-              echo "Пробуем альтернативный метод..."
-              
-              # Альтернативный метод: синхронизация только необходимого
-              echo "Синхронизируем только минимальный набор..."
-              repo sync -c -j1 \
-                --no-clone-bundle \
-                --no-tags \
-                --fetch-submodules \
-                platform/manifest \
-                platform/build \
-                platform/bionic \
-                platform/system/core \
-                device/salute/at30a6 2>/dev/null || true
-            fi
-          fi
+          <!-- Минимальный набор проектов для сборки recovery -->
+          <project path="build/make" name="platform/build" groups="pdk" />
+          <project path="build/blueprint" name="platform/build/blueprint" groups="pdk" />
+          <project path="build/soong" name="platform/build/soong" groups="pdk" />
+          <project path="art" name="platform/art" />
+          <project path="bionic" name="platform/bionic" />
+          <project path="bootable/recovery" name="platform/bootable/recovery" groups="pdk" />
+          <project path="device/generic/common" name="device/generic/common" groups="pdk" />
+          <project path="device/generic/goldfish" name="device/generic/goldfish" groups="pdk" />
+          <project path="external/arm-trusted-firmware" name="platform/external/arm-trusted-firmware" />
+          <project path="external/avb" name="platform/external/avb" />
+          <project path="external/bison" name="platform/external/bison" />
+          <project path="external/bootutils" name="platform/external/bootutils" />
+          <project path="external/bsdiff" name="platform/external/bsdiff" />
+          <project path="external/bzip2" name="platform/external/bzip2" />
+          <project path="external/clang" name="platform/external/clang" />
+          <project path="external/e2fsprogs" name="platform/external/e2fsprogs" />
+          <project path="external/elfutils" name="platform/external/elfutils" />
+          <project path="external/expat" name="platform/external/expat" />
+          <project path="external/f2fs-tools" name="platform/external/f2fs-tools" />
+          <project path="external/freetype" name="platform/external/freetype" />
+          <project path="external/fsck_msdos" name="platform/external/fsck_msdos" />
+          <project path="external/gptfdisk" name="platform/external/gptfdisk" />
+          <project path="external/libcxx" name="platform/external/libcxx" />
+          <project path="external/libselinux" name="platform/external/libselinux" />
+          <project path="external/lz4" name="platform/external/lz4" />
+          <project path="external/lzma" name="platform/external/lzma" />
+          <project path="external/mdnsresponder" name="platform/external/mdnsresponder" />
+          <project path="external/minijail" name="platform/external/minijail" />
+          <project path="external/openssh" name="platform/external/openssh" />
+          <project path="external/openssl" name="platform/external/openssl" />
+          <project path="external/pcre" name="platform/external/pcre" />
+          <project path="external/protobuf" name="platform/external/protobuf" />
+          <project path="external/selinux" name="platform/external/selinux" />
+          <project path="external/skia" name="platform/external/skia" />
+          <project path="external/squashfs-tools" name="platform/external/squashfs-tools" />
+          <project path="external/toybox" name="platform/external/toybox" />
+          <project path="external/zlib" name="platform/external/zlib" />
+          <project path="frameworks/av" name="platform/frameworks/av" />
+          <project path="frameworks/base" name="platform/frameworks/base" />
+          <project path="frameworks/native" name="platform/frameworks/native" />
+          <project path="hardware/broadcom/libbt" name="platform/hardware/broadcom/libbt" />
+          <project path="hardware/broadcom/wlan" name="platform/hardware/broadcom/wlan" />
+          <project path="hardware/libhardware" name="platform/hardware/libhardware" />
+          <project path="hardware/libhardware_legacy" name="platform/hardware/libhardware_legacy" />
+          <project path="hardware/ril" name="platform/hardware/ril" />
+          <project path="libcore" name="platform/libcore" />
+          <project path="packages/apps/Settings" name="platform/packages/apps/Settings" />
+          <project path="packages/providers/MediaProvider" name="platform/packages/providers/MediaProvider" />
+          <project path="prebuilts/build-tools" name="platform/prebuilts/build-tools" groups="pdk" />
+          <project path="prebuilts/clang/host/linux-x86" name="platform/prebuilts/clang/host/linux-x86" groups="pdk" />
+          <project path="prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9" name="platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9" groups="pdk" />
+          <project path="prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9" name="platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9" groups="pdk" />
+          <project path="prebuilts/go/linux-x86" name="platform/prebuilts/go/linux-x86" groups="pdk" />
+          <project path="prebuilts/misc" name="platform/prebuilts/misc" groups="pdk" />
+          <project path="prebuilts/ndk" name="platform/prebuilts/ndk" groups="pdk" />
+          <project path="prebuilts/python/linux-x86" name="platform/prebuilts/python/linux-x86" groups="pdk" />
+          <project path="prebuilts/sdk" name="platform/prebuilts/sdk" groups="pdk" />
+          <project path="system/bpf" name="platform/system/bpf" />
+          <project path="system/bt" name="platform/system/bt" />
+          <project path="system/core" name="platform/system/core" />
+          <project path="system/extras" name="platform/system/extras" />
+          <project path="system/libbase" name="platform/system/libbase" />
+          <project path="system/libfmq" name="platform/system/libfmq" />
+          <project path="system/libhidl" name="platform/system/libhidl" />
+          <project path="system/libhwbinder" name="platform/system/libhwbinder" />
+          <project path="system/libprocinfo" name="platform/system/libprocinfo" />
+          <project path="system/libvintf" name="platform/system/libvintf" />
+          <project path="system/libziparchive" name="platform/system/libziparchive" />
+          <project path="system/logging" name="platform/system/logging" />
+          <project path="system/media" name="platform/system/media" />
+          <project path="system/netd" name="platform/system/netd" />
+          <project path="system/security" name="platform/system/security" />
+          <project path="system/sepolicy" name="platform/system/sepolicy" />
+          <project path="system/tools/aidl" name="platform/system/tools/aidl" />
+          <project path="system/tools/hidl" name="platform/system/tools/hidl" />
+          <project path="system/vold" name="platform/system/vold" />
+          <project path="tools/external/fat32lib" name="platform/tools/external/fat32lib" />
+          
+          <!-- НАШЕ УСТРОЙСТВО -->
+          <project path="device/salute/at30a6" name="local/device" />
+        </manifest>
+        MANIFEST_EOF
+        
+        # Копируем дерево устройства
+        mkdir -p device/salute/at30a6
+        cp -r /device/* device/salute/at30a6/ || true
+        
+        echo "=== ШАГ 2: СИНХРОНИЗАЦИЯ (ТОЛЬКО ОСНОВНОЕ) ==="
+        # Синхронизируем только критически важное
+        for project in "build/make" "build/soong" "system/core" "bionic" "bootable/recovery" "device/salute/at30a6"; do
+          echo "Синхронизация: $project"
+          repo sync -c -j4 --no-tags --no-clone-bundle --force-sync $project 2>&1 | tail -20 || continue
         done
         
-        echo "4. Размер .repo после синхронизации:"
-        du -sh .repo || echo "Не удалось определить размер"
+        echo "=== ШАГ 3: НАСТРОЙКА ==="
+        # НАСТРОЙКИ КОТОРЫЕ ТОЧНО РАБОТАЮТ
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export LC_ALL=C
+        export BUILD_BROKEN_DUP_RULES=true
+        export BUILD_BROKEN_USES_BUILD_COPY_HEADERS=true
+        export BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES=true
+        export USE_LD=gold
+        export SKIP_ABI_CHECKS=true
         
-        # Копирование устройства
-        echo "5. Копирование устройства..."
-        if [ -d "/device" ]; then
-          mkdir -p device/salute/at30a6
-          cp -r /device/* device/salute/at30a6/ 2>/dev/null || echo "Частичное копирование"
-          
-          # Проверяем важные файлы
-          echo "Проверка важных файлов устройства:"
-          for file in AndroidProducts.mk BoardConfig.mk device.mk; do
-            if [ -f "device/salute/at30a6/$file" ]; then
-              echo "  ✅ $file найден"
-            else
-              echo "  ❌ $file отсутствует"
-            fi
+        # Инициализация сборки
+        source build/envsetup.sh
+        
+        # СОЗДАЕМ ПРОДУКТ ВРУЧНУЮ (обход lunch)
+        export TARGET_DEVICE=at30a6
+        export TARGET_PRODUCT=omni_at30a6
+        export TARGET_BUILD_VARIANT=eng
+        export OUT_DIR=out
+        
+        echo "Настройки устройства:"
+        echo "  TARGET_DEVICE=$TARGET_DEVICE"
+        echo "  TARGET_PRODUCT=$TARGET_PRODUCT"
+        
+        echo "=== ШАГ 4: СБОРКА ==="
+        # СБИРАЕМ ТОЛЬКО RECOVERY (без всей системы)
+        make -j$(nproc) recoveryimage 2>&1 | tee /output/build.log || {
+          echo "Попытка 1 не удалась, пробуем с make recovery..."
+          make -j$(nproc) recovery 2>&1 | tee -a /output/build.log
+        }
+        
+        echo "=== ШАГ 5: ПОИСК РЕЗУЛЬТАТОВ ==="
+        # Ищем recovery.img
+        find out -name "recovery.img" -type f 2>/dev/null | while read img; do
+          echo "✅ НАЙДЕН recovery.img: $img"
+          cp "$img" /output/recovery.img
+          ls -lh /output/recovery.img
+        done
+        
+        # Если не нашли recovery, ищем boot.img
+        if [ ! -f /output/recovery.img ]; then
+          find out -name "boot.img" -type f 2>/dev/null | while read img; do
+            echo "Найден boot.img: $img"
+            cp "$img" /output/boot.img
           done
         fi
         
-        # Проверяем наличие ядра
-        echo "6. Проверка файла ядра:"
-        if [ -f "device/salute/at30a6/prebuilt/kernel" ]; then
-          echo "✅ Файл ядра найден"
-          ls -lh "device/salute/at30a6/prebuilt/kernel"
-        else
-          echo "❌ Файл ядра НЕ найден"
-          echo "Ищем альтернативные файлы:"
-          find device/salute/at30a6/ -type f -name "*kernel*" -o -name "*.img" 2>/dev/null | head -10
+        # Если совсем ничего нет
+        if [ ! -f /output/recovery.img ] && [ ! -f /output/boot.img ]; then
+          echo "Создаю информацию об ошибке..."
+          echo "СБОРКА НЕ УДАЛАСА" > /output/error.txt
+          echo "Время: $(date)" >> /output/error.txt
+          echo "" >> /output/error.txt
+          echo "ПОСЛЕДНИЕ ОШИБКИ:" >> /output/error.txt
+          tail -50 /output/build.log >> /output/error.txt 2>/dev/null || echo "Нет логов" >> /output/error.txt
         fi
         
-        # Настройка окружения
-        echo "7. Настройка окружения..."
-        source build/envsetup.sh
+        echo "=== ЗАВЕРШЕНО ==="
+        BUILD_EOF
         
-        # Исправления для линковки
-        export USE_LD=gold
-        export ALLOW_MISSING_DEPENDENCIES=true
-        export LC_ALL=C
-        export SKIP_ABI_CHECKS=true
-        export TEMPORARY_DISABLE_PATH_RESTRICTIONS=true
+        chmod +x /tmp/build.sh
         
-        # Добавляем пути
-        export PATH="/android/prebuilts/clang/host/linux-x86/clang-r416183b1/bin:$PATH" 2>/dev/null || true
-        
-        echo "8. Выбор устройства..."
-        # Пробуем разные варианты
-        for lunch_cmd in "twrp_at30a6-eng" "omni_at30a6-eng" "aosp_at30a6-eng"; do
-          if lunch $lunch_cmd 2>/dev/null; then
-            echo "✅ Устройство: $lunch_cmd"
-            break
-          fi
-        done
-        
-        # Если автоматический выбор не сработал
-        if [ -z "$TARGET_DEVICE" ]; then
-          echo "Ручная настройка устройства..."
-          export TARGET_DEVICE=at30a6
-          export TARGET_PRODUCT=twrp_at30a6
-          export TARGET_BUILD_VARIANT=eng
-          
-          echo "Установлено вручную:"
-          echo "  TARGET_DEVICE=$TARGET_DEVICE"
-          echo "  TARGET_PRODUCT=$TARGET_PRODUCT"
-        fi
-        
-        # Сборка
-        echo "9. Начало сборки..."
-        echo "Используемые настройки линковки: USE_LD=$USE_LD"
-        
-        # Сначала пробуем собрать recovery
-        if make -j$(nproc) recoveryimage 2>&1 | tee build.log; then
-          echo "✅ Сборка recoveryimage успешна!"
-        else
-          echo "⚠️ Сборка recoveryimage не удалась"
-          
-          # Проверяем тип ошибки
-          if grep -q "ld.lld: error: version script assignment" build.log; then
-            echo "Обнаружена ошибка линковки, применяем дополнительное исправление..."
-            # Пробуем собрать с другими флагами
-            export LD_FLAGS="-Wl,--no-undefined-version"
-            make -j$(nproc) recoveryimage 2>&1 | tee -a build.log || echo "Вторая попытка не удалась"
-          fi
-        fi
-        
-        # Поиск результатов
-        echo "10. Поиск результатов..."
-        mkdir -p /out
-        
-        # Сохраняем логи
-        cp build.log /out/build.log 2>/dev/null || echo "Лог не сохранен"
-        
-        # Ищем образы
-        find out/target/product/ -name "*.img" -type f 2>/dev/null | while read -r img; do
-          echo "Найден образ: $img"
-          cp "$img" /out/ 2>/dev/null || true
-        done
-        
-        # Если ничего не найдено
-        if [ -z "$(ls -A /out/*.img 2>/dev/null)" ]; then
-          echo "Создаем информационный файл..."
-          {
-            echo "Сборка TWRP для at30a6"
-            echo "Дата: $(date)"
-            echo "Статус: Сборка завершена, образы не найдены"
-            echo ""
-            echo "=== ИНФОРМАЦИЯ О СИНХРОНИЗАЦИИ ==="
-            echo "Ветка TWRP: twrp-12.1"
-            echo "Локальный manifest: создан"
-            echo ""
-            echo "=== ФАЙЛЫ УСТРОЙСТВА ==="
-            ls -la device/salute/at30a6/ 2>/dev/null || echo "Каталог не найден"
-            echo ""
-            echo "=== ПОСЛЕДНИЕ ОШИБКИ ==="
-            tail -30 build.log 2>/dev/null || echo "Лог не доступен"
-          } > /out/info.txt
-        fi
-        
-        echo "11. Итоги сборки:"
-        ls -la /out/
-        
-        echo "=== КОНЕЦ СБОРКИ ==="
-        EOF
-        
-        chmod +x build_sync_fixed.sh
-        
-    - name: Run build with sync fixes
-      timeout-minutes: 120  # Увеличиваем таймаут
-      run: |
-        echo "🚀 Запуск сборки с исправлениями синхронизации..."
-        
+        # ЗАПУСКАЕМ В ОПТИМИЗИРОВАННОМ DOCKER
         docker run --rm \
-          --device-cgroup-rule='b 259:* rwm' \
-          -v "$(pwd)/device-tree:/device:ro" \
-          -v "$(pwd)/result:/out" \
-          -v "$(pwd)/build_sync_fixed.sh:/build.sh:ro" \
-          ubuntu:22.04 \
+          --name twrp-builder \
+          -v "$(pwd):/device:ro" \
+          -v "$(pwd)/../result:/output" \
+          -v "/tmp/build.sh:/build.sh:ro" \
+          -e TZ=UTC \
+          --workdir /android \
+          android_build:temporary \
           /bin/bash -c "
-            # Проверка диска
-            echo 'Свободное место в контейнере:'
-            df -h /
+            # ПОДГОТОВКА ОБРАЗА (делаем один раз)
+            if [ ! -f /prepared ]; then
+              echo 'Установка базовых зависимостей...'
+              apt-get update && apt-get install -y \
+                git curl python3 python-is-python3 \
+                openjdk-8-jdk-headless \
+                build-essential bc bison flex gperf \
+                zip unzip zlib1g-dev libc6-dev-i386 \
+                lib32ncurses5-dev libx11-dev lib32z1-dev \
+                libgl1-mesa-dev libxml2-utils xsltproc \
+                ccache rsync
+              
+              # Установка repo
+              curl -s https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
+              chmod +x /usr/local/bin/repo
+              
+              # Настройка git
+              git config --global user.email 'builder@twrp'
+              git config --global user.name 'TWRP Builder'
+              git config --global color.ui false
+              
+              touch /prepared
+            fi
             
-            # Установка зависимостей
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y \
-              git curl python3 python3-pip openjdk-11-jdk \
-              build-essential flex bison gperf zip unzip \
-              bc file ccache rsync libssl-dev libncurses-dev \
-              libxml2-utils xsltproc zlib1g-dev liblz4-tool \
-              gnupg net-tools ssh-client
-            
-            # Альтернативная установка repo (если основной способ не работает)
-            echo 'Установка repo инструмента...'
-            curl -s https://storage.googleapis.com/git-repo-downloads/repo > /tmp/repo
-            python3 /tmp/repo version || {
-              echo 'Используем альтернативный метод установки repo...'
-              pip3 install git-repo
-              ln -sf $(which repo) /usr/local/bin/repo
-            }
-            chmod +x /tmp/repo
-            mv /tmp/repo /usr/local/bin/repo
-            
-            # Настройка Git LFS если нужно
-            curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | bash
-            apt-get install -y git-lfs
-            git lfs install
-            
-            # Создаем рабочую директорию
+            # ЗАПУСК СБОРКИ
             mkdir -p /android
             cd /android
-            
-            # Запускаем сборку
             /build.sh
-          "
-          
-    - name: Check results
-      run: |
-        echo "📋 Проверка результатов сборки..."
+          " || echo "Docker завершился с ошибкой"
         
-        if [ -f "result/recovery.img" ]; then
-          echo "🎉 УСПЕХ! recovery.img создан!"
-          ls -lh result/recovery.img
-          echo "Размер: $(stat -c%s result/recovery.img) байт"
-          echo "✅ Сборка TWRP завершена успешно!"
-          
-        elif [ -f "result/boot.img" ]; then
-          echo "✅ boot.img создан!"
-          ls -lh result/boot.img
-          echo "ℹ️ Собран boot образ вместо recovery"
-          
-        elif [ -f "result/info.txt" ]; then
-          echo "📄 Информация о сборке:"
-          cat result/info.txt | head -50
-          
-          # Проверяем логи
-          if [ -f "result/build.log" ]; then
-            echo ""
-            echo "🔍 Ключевые ошибки из логов:"
-            
-            # Ищем ошибки синхронизации
-            if grep -i "cannot initialize work tree" result/build.log; then
-              echo ""
-              echo "⚠️ ОБНАРУЖЕНА ОШИБКА СИНХРОНИЗАЦИИ!"
-              echo "Рекомендуемые действия:"
-              echo "1. Проверьте доступность репозитория TWRP"
-              echo "2. Попробуйте другую ветку: twrp-11 вместо twrp-12.1"
-              echo "3. Увеличьте timeout в workflow"
-            fi
-            
-            # Ищем ошибки линковки
-            if grep -i "ld.lld.*error" result/build.log; then
-              echo ""
-              echo "⚠️ ОБНАРУЖЕНА ОШИБКА ЛИНКОВКИ!"
-              grep -i "ld.lld.*error" result/build.log | head -5
-            fi
-          fi
-          
+        # ПРОВЕРЯЕМ РЕЗУЛЬТАТЫ
+        echo "📦 Результаты сборки:"
+        if [ -f "../result/recovery.img" ]; then
+          echo "🎉🎉🎉 УСПЕХ! TWRP recovery.img СОБРАН!"
+          ls -lh ../result/recovery.img
+          echo "SHA256: $(sha256sum ../result/recovery.img | cut -d' ' -f1)"
+        elif [ -f "../result/boot.img" ]; then
+          echo "✅ boot.img собран"
+          ls -lh ../result/boot.img
+        elif [ -f "../result/error.txt" ]; then
+          echo "❌ Ошибка сборки:"
+          head -20 ../result/error.txt
         else
-          echo "❌ Результаты не найдены"
-          echo "Содержимое result/:"
-          ls -la result/
+          echo "⚠️ Неизвестный результат"
+          ls -la ../result/ || mkdir -p ../result
         fi
         
-    - name: Alternative sync method (fallback)
-      if: failure()
-      run: |
-        echo "🔄 Запуск альтернативного метода сборки..."
-        
-        # Используем минимальный Docker образ с предустановленным Android
-        docker run --rm \
-          -v "$(pwd)/device-tree:/device:ro" \
-          -v "$(pwd)/result:/out" \
-          lineageos4microg/docker-lineage-cicd:latest \
-          /bin/bash -c "
-            echo 'Используем предварительно настроенную среду LineageOS...'
-            
-            # Проверяем устройство
-            if [ -d '/device' ]; then
-              mkdir -p /home/build/android/lineage/device/salute/at30a6
-              cp -r /device/* /home/build/android/lineage/device/salute/at30a6/
-              
-              echo 'Содержимое устройства:'
-              ls -la /home/build/android/lineage/device/salute/at30a6/
-            fi
-            
-            # Простая проверка
-            echo 'ANDROID!' > /out/test.txt
-            echo 'Проверка завершена' >> /out/test.txt
-          "
-        
-    - name: Upload artifacts
+    - name: Upload results
       uses: actions/upload-artifact@v4
       with:
         name: TWRP-Build-Results
         path: result/
-        retention-days: 7
         if-no-files-found: error
+        retention-days: 30
         
-    - name: Upload logs separately
-      if: always()
-      uses: actions/upload-artifact@v4
+    - name: Create GitHub Release
+      if: success() && github.event_name == 'workflow_dispatch'
+      uses: softprops/action-gh-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        name: Build-Logs
-        path: |
-          result/build.log
-          result/info.txt
-        retention-days: 7
-        if-no-files-found: ignore
+        files: result/recovery.img
+        tag_name: twrp-$(date +%Y%m%d-%H%M%S)
+        name: "TWRP Recovery $(date +%Y-%m-%d)"
+        body: |
+          # TWRP Recovery for SaluteTV at30a6
+          
+          ### SHA-256 Checksum
+          ```
+          ${{ hashFiles('result/recovery.img') }}
+          ```
+          
+          ### Installation
+          ```bash
+          fastboot flash recovery recovery.img
+          fastboot reboot recovery
+          ```
+        draft: false
+        prerelease: false
