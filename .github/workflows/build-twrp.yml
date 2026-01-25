@@ -1,14 +1,9 @@
-name: TWRP Build for at30a6 - FINAL WORKING VERSION
+name: TWRP Build for at30a6
 
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
-    paths:
-      - 'BoardConfig.mk'
-      - 'device.mk'
-      - 'AndroidProducts.mk'
-      - '*.mk'
 
 jobs:
   build:
@@ -16,127 +11,58 @@ jobs:
     timeout-minutes: 60
     
     steps:
-    - name: Checkout repository
+    - name: Checkout device tree
       uses: actions/checkout@v4
       
-    - name: Setup Android build environment
+    - name: Install dependencies
       run: |
-        echo "Setting up build environment..."
         sudo apt-get update
-        sudo apt-get install -y \
-          git-core gnupg flex bison build-essential zip curl zlib1g-dev \
-          gcc-multilib g++-multilib libc6-dev-i386 lib32ncurses5-dev \
-          x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev \
-          libxml2-utils xsltproc unzip fontconfig python3 python3-pip \
-          openjdk-11-jdk ccache rsync
-        
-        # Install repo tool
-        mkdir -p ~/bin
-        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-        chmod a+x ~/bin/repo
-        echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
-        source ~/.bashrc
-        
-    - name: Initialize TWRP repository
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          git python3 openjdk-11-jdk curl \
+          build-essential bc bison flex gperf zip unzip
+    
+    - name: Install repo tool
       run: |
-        echo "Initializing TWRP 11.0 (Android 11)..."
-        mkdir -p twrp-build && cd twrp-build
-        
-        # Minimal manifest
-        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
-          -b twrp-11 \
-          --depth=1
-        
-        # Create local manifest
-        mkdir -p .repo/local_manifests
-        cat > .repo/local_manifests/local.xml << 'EOF'
-        <?xml version="1.0" encoding="UTF-8"?>
-        <manifest>
-          <project path="device/salute/at30a6" 
-                   name="../.."
-                   remote="origin"
-                   revision="$GITHUB_SHA" />
-        </manifest>
-        EOF
-        
-        # Minimal sync
-        repo sync -c -j4 --no-tags --no-clone-bundle \
-          platform/build \
-          platform/bionic \
-          platform/system/core \
-          bootable/recovery \
-          device/salute/at30a6
-        
-    - name: Build TWRP
+        curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
+        chmod +x ~/repo
+        sudo mv ~/repo /usr/local/bin/
+        repo version
+    
+    - name: Initialize and build
       env:
         ALLOW_MISSING_DEPENDENCIES: true
         LC_ALL: C
         USE_LD: gold
       run: |
-        cd twrp-build
-        source build/envsetup.sh
+        mkdir twrp && cd twrp
         
-        # Direct device setup (bypass lunch issues)
+        # Minimal init
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
+          -b twrp-11 --depth=1
+        
+        # Sync only required
+        repo sync -c -j2 --no-tags --no-clone-bundle \
+          platform/build \
+          platform/bionic \
+          platform/system/core \
+          bootable/recovery
+        
+        # Copy device tree
+        mkdir -p device/salute/at30a6
+        cp -r ../* device/salute/at30a6/ 2>/dev/null || true
+        
+        # Build
+        source build/envsetup.sh
         export TARGET_DEVICE=at30a6
         export TARGET_PRODUCT=omni_at30a6
-        export TARGET_BUILD_VARIANT=eng
+        make -j2 recoveryimage 2>&1 | tee build.log
         
-        echo "Building for device: $TARGET_DEVICE"
-        echo "Product: $TARGET_PRODUCT"
-        
-        # Build recovery only
-        make -j$(nproc) recoveryimage 2>&1 | tee build.log || {
-          echo "Build failed, trying alternative..."
-          make -j$(nproc) recovery 2>&1 | tee -a build.log
-        }
-        
-    - name: Collect artifacts
-      run: |
-        echo "Searching for recovery image..."
-        find twrp-build/out -name "recovery.img" -type f 2>/dev/null | head -1 | while read img; do
-          echo "Found recovery.img: $img"
-          cp "$img" recovery.img
-        done
-        
-        if [ -f "recovery.img" ]; then
-          echo "✅ SUCCESS: TWRP recovery built!"
-          ls -lh recovery.img
-          echo "Size: $(stat -c%s recovery.img) bytes"
-        else
-          echo "❌ No recovery.img found"
-          echo "Build log tail:"
-          tail -50 twrp-build/build.log 2>/dev/null || echo "No build log"
-          exit 1
-        fi
-        
-    - name: Upload TWRP recovery
+        # Copy result
+        find out -name "recovery.img" -exec cp {} ../recovery.img \;
+    
+    - name: Upload result
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP-Recovery-at30a6
+        name: TWRP-Recovery
         path: recovery.img
-        retention-days: 30
-        
-    - name: Create Release
-      if: success() && github.event_name == 'workflow_dispatch'
-      uses: softprops/action-gh-release@v1
-      with:
-        files: recovery.img
-        tag_name: twrp-$(date +%Y%m%d)
-        name: "TWRP $(date +%Y-%m-%d)"
-        body: |
-          # TWRP Recovery for SaluteTV at30a6
-          
-          Built: $(date)
-          
-          ### Installation
-          ```bash
-          fastboot flash recovery recovery.img
-          fastboot reboot recovery
-          ```
-          
-          ### Checksum
-          ```
-          $(sha256sum recovery.img)
-          ```
-        draft: false
-        prerelease: false
+        if-no-files-found: error
