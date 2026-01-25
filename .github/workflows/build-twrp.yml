@@ -1,93 +1,45 @@
-name: SaluteTV TWRP Build
-
-on:
-  workflow_dispatch:
-    inputs:
-      TWRP_BRANCH:
-        description: 'TWRP Branch'
-        required: true
-        default: 'twrp-13'
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+docker run --rm \
+  -v "$(pwd)/device-tree:/root/device:ro" \
+  -v "$(pwd)/workspace:/root/android" \
+  -v "$(pwd)/result:/root/out" \
+  -e TARGET_DEVICE="at30a6" \
+  -e TARGET_PRODUCT="twrp" \
+  ubuntu:22.04 \
+  /bin/bash -c "
+    # 1. Установка базовых зависимостей
+    apt-get update && apt-get install -y \
+        git-core gnupg flex bison build-essential zip curl zlib1g-dev \
+        gcc-multilib g++-multilib libc6-dev-i386 libncurses5 \
+        lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
+        libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3 \
+        repo bc imagemagick ccache schedtool rsync
     
-    steps:
-    - name: Checkout Device Tree
-      uses: actions/checkout@v4
-      with:
-        repository: SKOCHE/SaluteTV_at30a6_TWRP
-        path: device-tree
-      
-    - name: Build TWRP (Correct Docker Image)
-      run: |
-        mkdir -p workspace result
-        
-        echo "🚀 Сборка TWRP для at30a6"
-        
-        # ВАЖНО: Используем образ, созданный для TWRP.
-        # Например, официальный образ от TWRP или основанный на AOSP.
-        docker run --rm \
-          -v "$(pwd)/device-tree:/root/device:ro" \
-          -v "$(pwd)/workspace:/root/android" \
-          -v "$(pwd)/result:/root/out" \
-          -e TARGET_DEVICE="at30a6" \
-          -e TARGET_PRODUCT="twrp" \
-          ubuntu:22.04 \
-          /bin/bash -c "
-            # 1. Установка базовых зависимостей
-            apt-get update && apt-get install -y \
-                git-core gnupg flex bison build-essential zip curl zlib1g-dev \
-                gcc-multilib g++-multilib libc6-dev-i386 libncurses5 \
-                lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
-                libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3 \
-                repo bc imagemagick ccache schedtool rsync
-            
-            # 2. Переход в рабочую директорию
-            cd /root/android
-            
-            # 3. Инициализация репозитория TWRP
-            repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b ${{ github.event.inputs.TWRP_BRANCH }} --depth=1
-            
-            # 4. Синхронизация исходного кода
-            repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags
-            
-            # 5. Копирование дерева устройства
-            mkdir -p device/salute/
-            cp -r /root/device device/salute/at30a6
-            
-            # 6. Настройка окружения и сборка
-            source build/envsetup.sh
-            export ALLOW_MISSING_DEPENDENCIES=true
-            lunch twrp_at30a6-eng || lunch omni_at30a6-eng
-            
-            # 7. Непосредственно сборка
-            mka recoveryimage
-            
-            # 8. Копирование результата
-            cp out/target/product/at30a6/recovery.img /root/out/
-          "
-        
-        echo "✅ Сборка в Docker завершена."
-
-    - name: Проверка результата
-      run: |
-        echo "🔍 Проверяем артефакты..."
-        if [ -f "result/recovery.img" ]; then
-          echo "🎉 УСПЕХ! Recovery-образ найден:"
-          ls -lh result/recovery.img
-        else
-          echo "❌ ОШИБКА: Файл recovery.img не найден в result/"
-          echo "Содержимое workspace/out (если есть):"
-          find workspace -name "*.img" 2>/dev/null | head -5
-          exit 1
-        fi
-
-    - name: Загрузка артефакта
-      if: success()
-      uses: actions/upload-artifact@v4
-      with:
-        name: twrp-salute-at30a6
-        path: result/recovery.img
+    # 2. Переход в рабочую директорию
+    cd /root/android
+    
+    # 3. Инициализация репозитория TWRP с правильной веткой
+    # Используем twrp-11.0 для Android 11 или twrp-12.1 для Android 12
+    repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --depth=1
+    
+    # 4. Синхронизация исходного кода
+    repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags
+    
+    # 5. Копирование дерева устройства
+    mkdir -p device/salute/
+    cp -r /root/device device/salute/at30a6
+    
+    # 6. Установка дополнительных зависимостей для AOSP
+    apt-get install -y openjdk-11-jdk
+    
+    # 7. Настройка окружения и сборка
+    source build/envsetup.sh
+    export ALLOW_MISSING_DEPENDENCIES=true
+    export LC_ALL=C
+    lunch twrp_at30a6-eng || lunch omni_at30a6-eng
+    
+    # 8. Непосредственно сборка
+    mka recoveryimage
+    
+    # 9. Копирование результата
+    cp out/target/product/at30a6/recovery.img /root/out/ 2>/dev/null || true
+  "
