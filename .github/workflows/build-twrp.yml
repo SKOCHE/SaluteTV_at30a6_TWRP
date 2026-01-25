@@ -26,8 +26,43 @@ jobs:
         source build/envsetup.sh
         lunch twrp_at30a6-eng 2>/dev/null || export TARGET_PRODUCT=twrp_at30a6
         make -j2 recoveryimage || make -j2 recovery
-        find out -name "recovery.img" -exec cp {} ../recovery.img \;
-        [ -f ../recovery.img ] && echo "✅" && ls -lh ../recovery.img || (echo "❌" && exit 1)
+        
+        # === НАЧАЛО ДОБАВЛЕННОГО КОДА ===
+        echo "Поиск recovery.img..."
+        
+        # 1. Прямой путь
+        if [ -f "out/target/product/at30a6/recovery.img" ]; then
+            cp out/target/product/at30a6/recovery.img ../recovery.img
+            echo "✅ Найден: out/target/product/at30a6/recovery.img"
+        
+        # 2. Поиск в product
+        else
+            find out/target/product -name "recovery.img" -type f 2>/dev/null | head -1 | while read img; do
+                echo "✅ Найден: $img"
+                cp "$img" ../recovery.img
+            done
+        fi
+        
+        # 3. Если не нашли
+        if [ ! -f "../recovery.img" ]; then
+            echo "Ищем везде..."
+            find . -name "recovery.img" -type f 2>/dev/null | head -1 | while read img; do
+                echo "✅ Найден: $img"
+                cp "$img" ../recovery.img
+            done
+        fi
+        
+        # 4. Результат
+        if [ -f "../recovery.img" ]; then
+            echo "🎉 УСПЕХ!"
+            ls -lh ../recovery.img
+        else
+            echo "❌ ОШИБКА"
+            find . -name "*.img" -type f 2>/dev/null | head -5
+            exit 1
+        fi
+        # === КОНЕЦ ДОБАВЛЕННОГО КОДА ===
+    
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
