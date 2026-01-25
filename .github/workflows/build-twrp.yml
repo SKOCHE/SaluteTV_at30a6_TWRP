@@ -24,10 +24,45 @@ jobs:
         source build/envsetup.sh
         lunch twrp_at30a6-eng 2>/dev/null || export TARGET_PRODUCT=twrp_at30a6
         make -j2 recoveryimage || make -j2 recovery
-        find out -name "recovery.img" -exec cp {} ../recovery.img \;
-        [ -f ../recovery.img ] && echo "✅" && ls -lh ../recovery.img || (echo "❌" && exit 1)
+        
+        # ИЩЕМ ВО ВСЕХ ВОЗМОЖНЫХ МЕСТАХ
+        echo "Searching for recovery.img..."
+        find . -type f -name "recovery.img" 2>/dev/null | head -5
+        
+        # Пробуем разные пути
+        if [ -f "out/target/product/at30a6/recovery.img" ]; then
+          cp out/target/product/at30a6/recovery.img ../recovery.img
+          echo "Found in out/target/product/at30a6/"
+        elif [ -f "out/target/product/*/recovery.img" ]; then
+          cp out/target/product/*/recovery.img ../recovery.img
+          echo "Found in out/target/product/*/"
+        elif [ -f "out/dist/recovery.img" ]; then
+          cp out/dist/recovery.img ../recovery.img
+          echo "Found in out/dist/"
+        else
+          # Ищем любой .img файл
+          find out -name "*.img" -type f 2>/dev/null | head -3 | while read img; do
+            echo "Found image: $img"
+            cp "$img" ../recovery.img
+            break
+          done
+        fi
+        
+        # Проверяем результат
+        if [ -f "../recovery.img" ]; then
+          echo "✅ SUCCESS: TWRP built!"
+          ls -lh ../recovery.img
+          echo "Size: $(wc -c < ../recovery.img) bytes"
+        else
+          echo "❌ ERROR: No recovery.img found"
+          echo "Listing output directory:"
+          find out -name "*.img" -type f 2>/dev/null | head -10
+          echo "Build completed but no image found"
+          exit 1
+        fi
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
         name: TWRP
         path: recovery.img
+        if-no-files-found: error
