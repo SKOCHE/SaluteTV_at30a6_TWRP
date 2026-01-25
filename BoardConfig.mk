@@ -46,6 +46,10 @@ BOARD_TAGS_OFFSET := 0x00000100
 # Board name for mkbootimg
 BOARD_NAME := at30a6
 
+# Явно указываем выходной файл
+TARGET_RECOVERY_IMAGE_NAME := recovery.img
+PRODUCT_OUT := out/target/product/at30a6
+
 # Kernel cmdline - SIMPLIFIED
 BOARD_KERNEL_CMDLINE := androidboot.selinux=permissive
 BOARD_KERNEL_IMAGE_NAME := zImage
@@ -139,3 +143,4 @@ BOARD_FLASH_BLOCK_SIZE := 131072
 TARGET_RECOVERY_OVERSCAN_PERCENT := 10
 TW_NO_SCREEN_BLANK := true
 TW_NO_SCREEN_TIMEOUT := true
+
