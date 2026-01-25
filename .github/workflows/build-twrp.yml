@@ -28,10 +28,11 @@ jobs:
         
     - name: Build TWRP using optimized approach
       run: |
-        echo "🚀 Сборка TWRP для at30a6 (оптимизированный метод)"
+        echo "🚀 Сборка TWRP для at30a6"
+        echo "📊 Размер .repo: 8GB - это нормально для TWRP"
         
         # Создаем оптимизированный Dockerfile
-        cat > Dockerfile.twrp << 'EOF'
+        cat > Dockerfile.twrp << 'DOCKEREOF'
         FROM ubuntu:22.04
         
         # Установка ВСЕХ необходимых зависимостей
@@ -43,11 +44,11 @@ jobs:
             libgl1-mesa-dev libxml2-utils xsltproc unzip python3 python-is-python3 \
             openjdk-11-jdk ccache rsync ssh openssh-client \
             p7zip-full file make cmake ninja-build \
-            libssl-dev libncurses5-dev libreadline-dev && \
+            libssl-dev libncurses5-dev libreadline-dev bc && \
             apt-get clean && \
             rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
         
-        # Установка repo (используем HTTPS версию)
+        # Установка repo
         RUN curl -s https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo && \
             chmod a+x /usr/local/bin/repo
         
@@ -64,10 +65,10 @@ jobs:
         RUN chmod +x /build.sh
         
         CMD ["/build.sh"]
-        EOF
+        DOCKEREOF
         
-        # Создаем скрипт сборки
-        cat > build.sh << 'EOF'
+        # Создаем скрипт сборки с правильным синтаксисом
+        cat > build.sh << 'SCRIPTEOF'
         #!/bin/bash
         set -e
         
@@ -107,52 +108,22 @@ jobs:
             ls -la device/salute/at30a6/ 2>/dev/null || echo "Каталог пуст"
         fi
         
-        # Создаем минимальные файлы если их нет
         echo "5. Проверка конфигурационных файлов..."
-        if [ ! -f device/salute/at30a6/AndroidProducts.mk ] && [ ! -f device/salute/at30a6/device.mk ]; then
-            echo "Создание минимальных конфигурационных файлов..."
-            
-            # AndroidProducts.mk
-            cat > device/salute/at30a6/AndroidProducts.mk << 'PRODUCTS_EOF'
-            PRODUCT_MAKEFILES := \
-                $(LOCAL_DIR)/twrp_at30a6.mk
-            
-            COMMON_LUNCH_CHOICES := \
-                twrp_at30a6-eng
-            PRODUCTS_EOF
-            
-            # twrp_at30a6.mk
-            cat > device/salute/at30a6/twrp_at30a6.mk << 'DEVICE_EOF'
-            $(call inherit-product, device/salute/at30a6/device.mk)
-            $(call inherit-product, $(SRC_TARGET_DIR)/product/core_64_bit.mk)
-            $(call inherit-product, $(SRC_TARGET_DIR)/product/base.mk)
-            
-            # Device identifier
-            PRODUCT_NAME := twrp_at30a6
-            PRODUCT_DEVICE := at30a6
-            PRODUCT_BRAND := Salute
-            PRODUCT_MODEL := AT30a6
-            PRODUCT_MANUFACTURER := Salute
-            DEVICE_EOF
-            
-            # device.mk
-            cat > device/salute/at30a6/device.mk << 'BASE_EOF'
-            # Inherit from common TWRP configuration
-            $(call inherit-product, $(SRC_TARGET_DIR)/product/aosp_base.mk)
-            
-            # Device specific settings
-            PRODUCT_COPY_FILES += \
-                device/salute/at30a6/recovery/root:recovery/root/ \
-                device/salute/at30a6/fstab:recovery/root/fstab
-            
-            # Recovery options
-            TARGET_RECOVERY_FSTAB := device/salute/at30a6/recovery.fstab
-            TW_THEME := portrait_hdpi
-            TW_EXTRA_LANGUAGES := true
-            TW_INCLUDE_CRYPTO := true
-            TW_INCLUDE_RESETPROP := true
-            TW_INCLUDE_REPACKTOOLS := true
-            BOARD_EOF
+        
+        # Проверяем существующие файлы
+        if [ -f "device/salute/at30a6/AndroidProducts.mk" ]; then
+            echo "✅ AndroidProducts.mk найден"
+        fi
+        
+        if [ -f "device/salute/at30a6/device.mk" ]; then
+            echo "✅ device.mk найден"
+        fi
+        
+        if [ -f "device/salute/at30a6/BoardConfig.mk" ]; then
+            echo "✅ BoardConfig.mk найден"
+            # Выводим ключевые настройки
+            echo "=== Ключевые настройки из BoardConfig.mk ==="
+            grep -E "(TARGET_ARCH|TARGET_BOARD_PLATFORM|BOARD_KERNEL|TARGET_PREBUILT_KERNEL)" device/salute/at30a6/BoardConfig.mk || true
         fi
         
         echo "6. Сборка окружения..."
@@ -163,56 +134,102 @@ jobs:
         # Пытаемся выбрать конфигурацию
         echo "7. Выбор конфигурации устройства..."
         if lunch twrp_at30a6-eng 2>/dev/null || lunch omni_at30a6-eng 2>/dev/null; then
-            echo "Конфигурация успешно выбрана"
+            echo "✅ Конфигурация успешно выбрана"
         else
-            echo "Создание пользовательской конфигурации..."
-            # Создаем временную конфигурацию
+            echo "⚠️ Конфигурация не найдена, пробуем вручную..."
+            # Проверяем доступные варианты
+            echo "Доступные устройства:"
+            lunch 2>&1 | grep -i at30a6 || echo "at30a6 не найден в списке"
+            
+            # Пробуем установить переменные вручную
             export TARGET_DEVICE=at30a6
             export TARGET_PRODUCT=twrp_at30a6
+            echo "Установлены переменные: TARGET_DEVICE=$TARGET_DEVICE, TARGET_PRODUCT=$TARGET_PRODUCT"
         fi
         
         echo "8. Начало сборки..."
-        # Пробуем собрать с минимальными требованиями
-        make -j2 recoveryimage 2>&1 | tee build.log || {
-            echo "Попытка сборки bootimage..."
-            make -j2 bootimage 2>&1 | tee -a build.log || true
-        }
+        
+        # Сначала пробуем собрать recoveryimage
+        echo "Попытка сборки recoveryimage..."
+        if make -j2 recoveryimage 2>&1 | tee build.log; then
+            echo "✅ Сборка recoveryimage успешна!"
+        else
+            echo "⚠️ Сборка recoveryimage не удалась, пробуем bootimage..."
+            if make -j2 bootimage 2>&1 | tee -a build.log; then
+                echo "✅ Сборка bootimage успешна!"
+            else
+                echo "❌ Сборка bootimage не удалась"
+                echo "Логи сборки:"
+                tail -50 build.log || true
+            fi
+        fi
         
         echo "9. Поиск результатов сборки..."
+        
+        # Создаем выходную директорию
+        mkdir -p /out
+        
         # Ищем все возможные результаты
         RESULTS_FOUND=0
-        for pattern in "recovery.img" "boot.img" "*.img" "kernel" "Image*" "*.dtb"; do
-            find out/target/product/ -name "$pattern" -type f 2>/dev/null | while read file; do
-                echo "Найден файл: $file"
-                cp "$file" /out/ 2>/dev/null && RESULTS_FOUND=1
+        SEARCH_PATTERNS=("recovery.img" "boot.img" "*.img" "kernel" "Image*" "*.dtb" "*.bin")
+        
+        for pattern in "${SEARCH_PATTERNS[@]}"; do
+            echo "Поиск: $pattern"
+            find out/target/product/ -name "$pattern" -type f 2>/dev/null | while read -r file; do
+                echo "📄 Найден файл: $file"
+                cp "$file" /out/ 2>/dev/null && {
+                    RESULTS_FOUND=1
+                    echo "  → Скопирован в /out/"
+                }
             done
         done
         
         if [ $RESULTS_FOUND -eq 0 ]; then
-            echo "Создание тестового файла..."
-            echo "TWRP сборка для at30a6 - требуется настройка дерева устройства" > /out/build_info.txt
-            echo "Необходимые файлы:" >> /out/build_info.txt
-            echo "1. BoardConfig.mk" >> /out/build_info.txt
-            echo "2. AndroidProducts.mk" >> /out/build_info.txt
-            echo "3. device.mk" >> /out/build_info.txt
-            echo "4. Кернел исходники" >> /out/build_info.txt
+            echo "ℹ️  Основные файлы не найдены, проверяем другие..."
+            
+            # Создаем информационный файл
+            cat > /out/build_info.txt << INFOEOF
+            ============================================
+            TWRP Build Information for at30a6
+            ============================================
+            
+            📅 Дата сборки: $(date)
+            
+            📁 Структура дерева устройства:
+            $(find device/salute/at30a6 -type f -name "*.mk" -o -name "*.sh" | sort)
+            
+            ⚙️ BoardConfig.mk основные настройки:
+            $(grep -E "^(TARGET_|BOARD_|TW_)" device/salute/at30a6/BoardConfig.mk 2>/dev/null || echo "Не найден")
+            
+            🔍 Для успешной сборки проверьте:
+            1. Наличие исходников ядра или прекомпилированного ядра
+            2. Корректность путей в BoardConfig.mk
+            3. Наличие всех необходимых зависимостей
+            
+            📊 Размер .repo: $(du -sh .repo 2>/dev/null | cut -f1 || echo "неизвестно")
+            INFOEOF
+            
+            # Копируем важные файлы для отладки
+            cp device/salute/at30a6/BoardConfig.mk /out/ 2>/dev/null || true
+            cp device/salute/at30a6/device.mk /out/ 2>/dev/null || true
+            cp build.log /out/ 2>/dev/null || true
         fi
         
         echo "10. Сборка завершена!"
-        echo "Содержимое /out/:"
+        echo "📦 Содержимое /out/:"
         ls -la /out/
         
         echo "=== ЗАВЕРШЕНИЕ СБОРКИ ==="
-        EOF
+        SCRIPTEOF
         
         chmod +x build.sh
         
         # Собираем Docker образ
-        echo "Сборка Docker образа..."
+        echo "🛠 Сборка Docker образа..."
         docker build -t twrp-builder -f Dockerfile.twrp .
         
         # Запускаем сборку
-        echo "Запуск сборки TWRP..."
+        echo "▶️  Запуск сборки TWRP..."
         docker run --rm \
           -v "$(pwd)/device-tree:/device:ro" \
           -v "$(pwd)/result:/out" \
@@ -221,224 +238,179 @@ jobs:
     - name: Check and analyze results
       run: |
         echo "📋 Анализ результатов сборки:"
+        echo "=============================="
         
         if [ -f "result/recovery.img" ]; then
-          echo "✅ SUCCESS: Найден recovery.img!"
+          echo "🎉 УСПЕХ: Найден recovery.img!"
+          echo "📊 Информация о файле:"
           ls -lh result/recovery.img
           file result/recovery.img
           
-          # Проверяем тип файла
-          echo "Информация о образе:"
-          hexdump -C result/recovery.img | head -20
+          # Создаем success маркер
+          echo "✅ Сборка TWRP УСПЕШНА!" > result/SUCCESS.txt
+          echo "Файл: recovery.img" >> result/SUCCESS.txt
+          echo "Размер: $(ls -lh result/recovery.img | awk '{print $5}')" >> result/SUCCESS.txt
+          echo "Дата: $(date)" >> result/SUCCESS.txt
           
         elif [ -f "result/boot.img" ]; then
-          echo "✅ SUCCESS: Найден boot.img!"
+          echo "✅ УСПЕХ: Найден boot.img!"
+          echo "📊 Информация о файле:"
           ls -lh result/boot.img
           file result/boot.img
           
+          echo "✅ Сборка boot.img УСПЕШНА!" > result/SUCCESS.txt
+          echo "Файл: boot.img" >> result/SUCCESS.txt
+          
         elif [ $(ls -1 result/*.img 2>/dev/null | wc -l) -gt 0 ]; then
-          echo "✅ SUCCESS: Найдены образы!"
+          echo "✅ УСПЕХ: Найдены образы!"
+          echo "📋 Список файлов:"
           for img in result/*.img; do
-            echo "Файл: $img"
+            echo "📄 $img"
             ls -lh "$img"
-            file "$img"
+            file "$img" | head -1
+            echo "---"
           done
+          
+          echo "Найдены образы:" > result/SUCCESS.txt
+          ls result/*.img >> result/SUCCESS.txt
           
         elif [ -f "result/build_info.txt" ]; then
           echo "📄 Информация о сборке:"
           cat result/build_info.txt
           
-          # Анализируем что есть в device-tree
+          # Анализируем BoardConfig.mk
           echo ""
-          echo "📁 Анализ device-tree:"
-          echo "Содержимое репозитория:"
-          find device-tree -type f -name "*.mk" -o -name "*.prop" -o -name "*.rc" | head -20
-          
-          echo ""
-          echo "Ключевые файлы:"
-          for file in BoardConfig.mk AndroidProducts.mk device.mk AndroidBoard.mk; do
-            if [ -f "device-tree/$file" ]; then
-              echo "✅ Найден: $file"
+          echo "🔍 Анализ BoardConfig.mk:"
+          if [ -f "result/BoardConfig.mk" ]; then
+            echo "=== Ключевые настройки ==="
+            grep -E "^(TARGET_ARCH|TARGET_BOARD_PLATFORM|BOARD_KERNEL|TARGET_PREBUILT_KERNEL|TW_)" result/BoardConfig.mk || echo "Не найдены ключевые настройки"
+            
+            # Проверяем наличие ядра
+            echo ""
+            echo "🔧 Проверка конфигурации ядра:"
+            if grep -q "TARGET_PREBUILT_KERNEL" result/BoardConfig.mk; then
+              KERNEL_PATH=$(grep "TARGET_PREBUILT_KERNEL" result/BoardConfig.mk | cut -d '=' -f2 | tr -d ' ')
+              echo "Используется прекомпилированное ядро: $KERNEL_PATH"
+            elif grep -q "TARGET_KERNEL_SOURCE" result/BoardConfig.mk; then
+              KERNEL_SOURCE=$(grep "TARGET_KERNEL_SOURCE" result/BoardConfig.mk | cut -d '=' -f2 | tr -d ' ')
+              echo "Используются исходники ядра: $KERNEL_SOURCE"
             else
-              echo "❌ Отсутствует: $file"
+              echo "❌ Не указан источник ядра!"
+              echo "Добавьте в BoardConfig.mk:"
+              echo "TARGET_PREBUILT_KERNEL := device/salute/at30a6/prebuilt/kernel"
+              echo "или"
+              echo "TARGET_KERNEL_SOURCE := kernel/salute/at30a6"
             fi
-          done
+          fi
           
         else
           echo "⚠️ Результаты не найдены"
           mkdir -p result
-          echo "Сборка не удалась. Проверьте логи выше." > result/error.log
+          echo "❌ Сборка не удалась. Проверьте логи выше." > result/ERROR.log
         fi
-        
-        # Создаем README с информацией
-        cat > result/README.md << 'EOF'
-        # TWRP Build Results
-        
-        ## Что нужно для успешной сборки:
-        
-        1. **BoardConfig.mk** - конфигурация платы
-        2. **AndroidProducts.mk** - список продуктов
-        3. **device.mk** - настройки устройства
-        4. **Исходники ядра** - папка kernel/ или ссылка на ядро
-        
-        ## Проверьте ваше дерево устройства:
-        
-        ```bash
-        # Должны быть следующие файлы:
-        device-tree/BoardConfig.mk
-        device-tree/AndroidProducts.mk  
-        device-tree/device.mk
-        device-tree/kernel/ (или TARGET_KERNEL_SOURCE в BoardConfig.mk)
-        ```
-        
-        ## Для отладки:
-        
-        Посмотрите полный вывод сборки в логах GitHub Actions.
-        EOF
         
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP-Build-Output
+        name: TWRP-Build-Results
         path: result/
         retention-days: 7
         if-no-files-found: warn
         
-    - name: Analyze device tree structure
+    - name: Check for kernel in device tree
       if: always()
       run: |
-        echo "🔍 Анализ структуры device-tree:"
-        echo "================================"
+        echo "🔎 Проверка наличия ядра в дереве устройства:"
+        echo "============================================"
         
-        # Создаем анализ структуры
-        ANALYSIS_FILE="result/device_tree_analysis.txt"
-        
-        echo "Анализ репозитория TWRP для at30a6" > $ANALYSIS_FILE
-        echo "Дата: $(date)" >> $ANALYSIS_FILE
-        echo "" >> $ANALYSIS_FILE
-        
-        echo "1. Общая структура:" >> $ANALYSIS_FILE
-        find device-tree -maxdepth 2 -type f -name "*.mk" -o -name "*.prop" -o -name "Makefile" | sort >> $ANALYSIS_FILE
-        echo "" >> $ANALYSIS_FILE
-        
-        echo "2. Ключевые файлы:" >> $ANALYSIS_FILE
-        for file in BoardConfig.mk AndroidProducts.mk device.mk AndroidBoard.mk BoardConfigCommon.mk; do
-          if [ -f "device-tree/$file" ]; then
-            echo "✅ $file (СОДЕРЖАНИЕ):" >> $ANALYSIS_FILE
-            cat "device-tree/$file" | head -50 >> $ANALYSIS_FILE
-            echo "---" >> $ANALYSIS_FILE
-          else
-            echo "❌ $file - ОТСУТСТВУЕТ" >> $ANALYSIS_FILE
+        if [ -d "device-tree/prebuilt" ]; then
+          echo "📁 Папка prebuilt найдена:"
+          find device-tree/prebuilt -type f -name "*kernel*" -o -name "*Image*" -o -name "*.dtb" | head -10
+          
+          # Проверяем BoardConfig.mk
+          if [ -f "device-tree/BoardConfig.mk" ]; then
+            echo ""
+            echo "📄 Проверка BoardConfig.mk:"
+            if grep -q "TARGET_PREBUILT_KERNEL" device-tree/BoardConfig.mk; then
+              KERNEL_PATH=$(grep "TARGET_PREBUILT_KERNEL" device-tree/BoardConfig.mk | cut -d '=' -f2)
+              echo "✅ Указано прекомпилированное ядро: $KERNEL_PATH"
+              
+              # Проверяем существует ли файл
+              if [ -f "device-tree/$(echo $KERNEL_PATH | sed 's/^device\/salute\/at30a6\///')" ]; then
+                echo "✅ Файл ядра существует"
+              else
+                echo "❌ Файл ядра не найден по указанному пути"
+                echo "Ищите в: device-tree/prebuilt/"
+              fi
+            else
+              echo "❌ TARGET_PREBUILT_KERNEL не указан в BoardConfig.mk"
+              echo "Добавьте строку:"
+              echo "TARGET_PREBUILT_KERNEL := device/salute/at30a6/prebuilt/kernel"
+            fi
           fi
-        done
-        echo "" >> $ANALYSIS_FILE
+        else
+          echo "❌ Папка prebuilt не найдена"
+          echo "Создайте папку device-tree/prebuilt/ и поместите туда:"
+          echo "1. kernel (прекомпилированное ядро)"
+          echo "2. dtb (дерево устройств)"
+          echo "3. modules (модули ядра если нужны)"
+        fi
         
-        echo "3. Файлы конфигурации:" >> $ANALYSIS_FILE
-        find device-tree -name "*.conf" -o -name "*.cfg" -o -name "*.ini" | head -10 >> $ANALYSIS_FILE
-        echo "" >> $ANALYSIS_FILE
-        
-        echo "4. Дерево каталогов:" >> $ANALYSIS_FILE
-        ls -la device-tree/ >> $ANALYSIS_FILE
-        
-        echo ""
-        echo "📊 Анализ завершен. Файл: $ANALYSIS_FILE"
-        
-    - name: Create minimal working example
+    - name: Fix kernel configuration if missing
       if: failure()
       run: |
-        echo "Создание минимального рабочего примера..."
+        echo "🛠 Попытка исправить конфигурацию ядра..."
         
-        # Создаем минимальное дерево устройства
-        mkdir -p example_device
-        
-        # BoardConfig.mk
-        cat > example_device/BoardConfig.mk << 'EOF'
-        # Архитектура
-        TARGET_ARCH := arm64
-        TARGET_ARCH_VARIANT := armv8-a
-        TARGET_CPU_ABI := arm64-v8a
-        TARGET_CPU_ABI2 :=
-        TARGET_CPU_VARIANT := generic
-        
-        # Вторая архитектура (если нужно 32-bit)
-        TARGET_2ND_ARCH := arm
-        TARGET_2ND_ARCH_VARIANT := armv8-a
-        TARGET_2ND_CPU_ABI := armeabi-v7a
-        TARGET_2ND_CPU_ABI2 := armeabi
-        TARGET_2ND_CPU_VARIANT := generic
-        
-        # Платформа
-        TARGET_BOARD_PLATFORM := mt6765  # Пример для MediaTek
-        
-        # Загрузчик
-        TARGET_NO_BOOTLOADER := true
-        TARGET_BOOTLOADER_BOARD_NAME := at30a6
-        
-        # Партиции
-        BOARD_BOOTIMAGE_PARTITION_SIZE := 33554432
-        BOARD_RECOVERYIMAGE_PARTITION_SIZE := 33554432
-        BOARD_SYSTEMIMAGE_PARTITION_SIZE := 3221225472
-        BOARD_USERDATAIMAGE_PARTITION_SIZE := 25769803776
-        BOARD_CACHEIMAGE_PARTITION_SIZE := 268435456
-        
-        # Файловая система
-        BOARD_HAS_LARGE_FILESYSTEM := true
-        BOARD_USERDATAIMAGE_FILE_SYSTEM_TYPE := ext4
-        BOARD_CACHEIMAGE_FILE_SYSTEM_TYPE := ext4
-        BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
-        TARGET_USERIMAGES_USE_EXT4 := true
-        TARGET_USERIMAGES_USE_F2FS := true
-        
-        # TWRP конфигурация
-        TW_THEME := portrait_hdpi
-        TW_EXTRA_LANGUAGES := true
-        TW_SCREEN_BLANK_ON_BOOT := true
-        TW_INPUT_BLACKLIST := "hbtp_vm"
-        TW_USE_TOOLBOX := true
-        TW_INCLUDE_CRYPTO := true
-        TW_MAX_BRIGHTNESS := 255
-        TW_DEFAULT_BRIGHTNESS := 128
-        TW_Y_OFFSET := 80
-        TW_H_OFFSET := -80
-        EOF
-        
-        # AndroidProducts.mk
-        cat > example_device/AndroidProducts.mk << 'EOF'
-        PRODUCT_MAKEFILES := \
-            $(LOCAL_DIR)/twrp_at30a6.mk
-        
-        COMMON_LUNCH_CHOICES := \
-            twrp_at30a6-eng \
-            omni_at30a6-eng
-        EOF
-        
-        # twrp_at30a6.mk
-        cat > example_device/twrp_at30a6.mk << 'EOF'
-        $(call inherit-product, $(SRC_TARGET_DIR)/product/base.mk)
-        $(call inherit-product, device/salute/at30a6/device.mk)
-        
-        # Device identifier
-        PRODUCT_NAME := twrp_at30a6
-        PRODUCT_DEVICE := at30a6
-        PRODUCT_BRAND := Salute
-        PRODUCT_MODEL := AT30a6
-        PRODUCT_MANUFACTURER := Salute
-        EOF
-        
-        # device.mk
-        cat > example_device/device.mk << 'EOF'
-        # Common device configuration
-        PRODUCT_COPY_FILES += \
-            device/salute/at30a6/fstab:$(TARGET_COPY_OUT_RAMDISK)/fstab
-        
-        # Recovery
-        TARGET_RECOVERY_FSTAB := device/salute/at30a6/recovery.fstab
-        
-        # Properties
-        PRODUCT_PROPERTY_OVERRIDES += \
-            ro.hardware=at30a6 \
-            ro.product.device=at30a6
-        EOF
-        
-        echo "Пример создан в папке example_device/"
-        echo "Скопируйте эти файлы в ваш репозиторий"
+        # Проверяем BoardConfig.mk
+        if [ -f "device-tree/BoardConfig.mk" ]; then
+          echo "Обновляю BoardConfig.mk..."
+          
+          # Создаем резервную копию
+          cp device-tree/BoardConfig.mk device-tree/BoardConfig.mk.backup
+          
+          # Проверяем есть ли уже настройки ядра
+          if ! grep -q "TARGET_PREBUILT_KERNEL" device-tree/BoardConfig.mk && ! grep -q "TARGET_KERNEL_SOURCE" device-tree/BoardConfig.mk; then
+            echo "Добавляю настройки ядра в BoardConfig.mk..."
+            
+            # Добавляем в конец файла
+            cat >> device-tree/BoardConfig.mk << 'KERNELCONFIG'
+            
+            # Kernel configuration
+            # Используйте один из вариантов:
+            
+            # Вариант 1: Прекомпилированное ядро (рекомендуется для TWRP)
+            TARGET_PREBUILT_KERNEL := device/salute/at30a6/prebuilt/kernel
+            TARGET_PREBUILT_DTB := device/salute/at30a6/prebuilt/dtb.img
+            
+            # Вариант 2: Исходники ядра (если есть)
+            # TARGET_KERNEL_SOURCE := kernel/salute/at30a6
+            # TARGET_KERNEL_CONFIG := at30a6_defconfig
+            # TARGET_KERNEL_CLANG_COMPILE := true
+            
+            # Размеры образов
+            BOARD_KERNEL_CMDLINE := console=ttyMT0,921600n1
+            BOARD_KERNEL_BASE := 0x40078000
+            BOARD_KERNEL_PAGESIZE := 2048
+            BOARD_KERNEL_OFFSET := 0x00008000
+            BOARD_RAMDISK_OFFSET := 0x14f88000
+            BOARD_TAGS_OFFSET := 0x13f88000
+            BOARD_DTB_OFFSET := 0x13f88000
+            BOARD_BOOTIMG_HEADER_VERSION := 2
+            
+            # Board
+            BOARD_INCLUDE_RECOVERY_DTBO := true
+            BOARD_INCLUDE_DTB_IN_BOOTIMG := true
+            KERNELCONFIG
+            
+            echo "✅ Настройки ядра добавлены"
+          else
+            echo "ℹ️ Настройки ядра уже присутствуют"
+          fi
+          
+          echo ""
+          echo "📄 Обновленный BoardConfig.mk (последние 20 строк):"
+          tail -20 device-tree/BoardConfig.mk
+          
+        else
+          echo "❌ BoardConfig.mk не найден"
+        fi
