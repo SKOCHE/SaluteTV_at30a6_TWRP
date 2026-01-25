@@ -16,8 +16,3 @@
 - Brightness control
 - Backup/Restore functionality
 
-## Building
-1. Clone this repo to TWRP source:
-   ```bash
-   git clone https://github.com/your-username/SaluteTV_at30a6_TWRP.git
-   cp -r SaluteTV_at30a6_TWRP/device/salute/ /path/to/twrp-source/device/
