@@ -1,170 +1,143 @@
-name: SaluteTV TWRP Build
+name: SaluteTV TWRP Build (Docker)
 
 on:
   workflow_dispatch:
     inputs:
-      MANIFEST_URL:
-        description: 'TWRP Manifest URL'
-        required: true
-        default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp'
-      MANIFEST_BRANCH:
+      TWRP_BRANCH:
         description: 'TWRP Branch'
         required: true
         default: 'twrp-13'
-      DEVICE_TREE_URL:
-        description: 'Device Tree URL'
-        required: true
-        default: 'https://github.com/SKOCHE/SaluteTV_at30a6_TWRP'
-      DEVICE_TREE_BRANCH:
-        description: 'Device Tree Branch'
-        required: true
-        default: 'main'
-      DEVICE_PATH:
-        description: 'Device Path'
-        required: true
-        default: 'device/salute/at30a6'
-      DEVICE_NAME:
-        description: 'Device Codename'
-        required: true
-        default: 'at30a6'
-      MAKEFILE_NAME:
-        description: 'Makefile Name'
-        required: true
-        default: 'twrp_at30a6'
-      BUILD_TARGET:
-        description: 'Build Target'
-        required: true
-        default: 'recovery'
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    
     steps:
-    - name: Display Build Info
-      run: |
-        echo "🧱 Building TWRP for SaluteTV (at30a6)"
-        echo "📦 Android: 13"
-        echo "📁 Device: ${{ github.event.inputs.DEVICE_NAME }}"
-
-    - name: Fix APT Mirrors Issue
-      run: |
-        # Удаляем проблемный файл mirrors
-        sudo rm -f /etc/apt/apt-mirrors.txt
-        # Используем стандартные репозитории
-        echo "deb http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list
-        echo "deb http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
-        echo "deb http://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
-
-    - name: Install Minimal Packages
-      run: |
-        # Только необходимые пакеты для сборки TWRP
-        sudo apt-get update
-        sudo apt-get install -y \
-          git repo python3 python3-pip openjdk-11-jdk \
-          bc bison build-essential ccache curl flex \
-          g++-multilib gcc-multilib libncurses-dev \
-          libssl-dev libxml2-utils lzop m4 zip unzip \
-          # Для 32-битной сборки
-          libc6-dev-i386 lib32stdc++6 lib32z1
+    - name: Checkout Device Tree
+      uses: actions/checkout@v4
+      with:
+        repository: SKOCHE/SaluteTV_at30a6_TWRP
+        path: device-tree
         
-        # Устанавливаем repo tool если не установлен
-        if ! command -v repo &> /dev/null; then
-          mkdir -p ~/bin
-          curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-          chmod a+x ~/bin/repo
-          sudo cp ~/bin/repo /usr/local/bin/
-        fi
-
-    - name: Setup Workspace
+    - name: Display Device Tree
       run: |
-        mkdir -p twrp-build
-        cd twrp-build
-        echo "WORKSPACE=$(pwd)" >> $GITHUB_ENV
+        echo "📁 Device Tree Structure:"
+        find device-tree -type f | head -20
+        echo ""
+        echo "📋 BoardConfig.mk preview:"
+        head -30 device-tree/device/salute/at30a6/BoardConfig.mk 2>/dev/null || echo "BoardConfig.mk not found"
+
+    - name: Setup Docker Build
+      run: |
+        # Создаем скрипт для сборки внутри Docker
+        cat > build.sh << 'EOF'
+        #!/bin/bash
+        set -e
         
-        git config --global user.name "GitHub Actions"
-        git config --global user.email "actions@github.com"
-        git config --global color.ui false
-
-    - name: Initialize TWRP Manifest
-      run: |
-        cd $WORKSPACE
-        repo init -u ${{ github.event.inputs.MANIFEST_URL }} \
-                  -b ${{ github.event.inputs.MANIFEST_BRANCH }} \
+        echo "🚀 Starting TWRP build in Docker..."
+        
+        # Переходим в workspace
+        cd /workspace
+        
+        # Инициализируем TWRP sources
+        echo "📦 Initializing TWRP manifest..."
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp \
+                  -b $TWRP_BRANCH \
                   --depth=1
-
-    - name: Sync TWRP Sources
-      timeout-minutes: 30
-      run: |
-        cd $WORKSPACE
-        repo sync -c -j4 --force-sync --no-clone-bundle --no-tags
-        echo "✅ Sources synced"
-
-    - name: Clone Device Tree
-      run: |
-        cd $WORKSPACE
-        echo "🌲 Cloning device tree..."
-        rm -rf ${{ github.event.inputs.DEVICE_PATH }}
-        git clone ${{ github.event.inputs.DEVICE_TREE_URL }} \
-                  -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} \
-                  --depth=1 \
-                  ${{ github.event.inputs.DEVICE_PATH }}
-        echo "✅ Device tree cloned"
-
-    - name: Setup Build Environment
-      run: |
-        cd $WORKSPACE
-        export USE_CCACHE=1
-        export CCACHE_EXEC=/usr/bin/ccache
-        ccache -M 15G
-        echo "CCACHE enabled"
-
-    - name: Build TWRP Recovery
-      timeout-minutes: 60
-      run: |
-        cd $WORKSPACE
         
-        # Setup environment
+        echo "🔄 Syncing sources..."
+        repo sync -c -j4 --force-sync --no-clone-bundle --no-tags
+        
+        # Копируем device tree
+        echo "🌲 Copying device tree..."
+        mkdir -p device/salute/
+        cp -r /device-tree/device/salute/at30a6 device/salute/
+        
+        # Проверяем структуру
+        echo "🔍 Checking device tree..."
+        if [ ! -f "device/salute/at30a6/BoardConfig.mk" ]; then
+          echo "❌ ERROR: BoardConfig.mk not found!"
+          find device/salute/at30a6/ -type f
+          exit 1
+        fi
+        
+        # Настраиваем окружение
+        echo "⚙️ Setting up build environment..."
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
         
-        # Build recovery
-        lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng
-        make -j$(nproc --all) recoveryimage
+        # Собираем
+        echo "🔨 Building recovery..."
+        lunch twrp_at30a6-eng
+        make -j$(nproc) recoveryimage
         
-        # Check result
-        if [ -f "out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img" ]; then
-          echo "✅ SUCCESS: Recovery built!"
-          ls -lh out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
+        # Проверяем результат
+        if [ -f "out/target/product/at30a6/recovery.img" ]; then
+          echo "✅ SUCCESS! Recovery built."
+          ls -lh out/target/product/at30a6/recovery.img
+          
+          # Копируем результат
+          cp out/target/product/at30a6/recovery.img /result/
         else
-          echo "❌ FAILED: Recovery not found"
+          echo "❌ ERROR: Recovery not found!"
+          find out/target/product/at30a6/ -name "*.img" 2>/dev/null || true
+          exit 1
+        fi
+        EOF
+        
+        chmod +x build.sh
+
+    - name: Run Docker Build
+      run: |
+        # Создаем директории
+        mkdir -p workspace result
+        
+        # Запускаем Docker контейнер
+        docker run --rm \
+          -v $(pwd)/device-tree:/device-tree:ro \
+          -v $(pwd)/workspace:/workspace \
+          -v $(pwd)/result:/result \
+          -e TWRP_BRANCH="${{ github.event.inputs.TWRP_BRANCH }}" \
+          lineageos4microg/docker-lineage-cicd:latest \
+          /bin/bash -c "/github/workspace/build.sh"
+        
+        echo "🏁 Docker build completed"
+
+    - name: Check Build Result
+      run: |
+        if [ -f "result/recovery.img" ]; then
+          echo "✅ Recovery image found!"
+          ls -lh result/recovery.img
+          echo "📏 Size: $(stat -c%s result/recovery.img) bytes"
+        else
+          echo "❌ No recovery image found"
           exit 1
         fi
 
-    - name: Upload Recovery Image
+    - name: Upload Recovery as Artifact
       uses: actions/upload-artifact@v4
-      if: success()
       with:
-        name: twrp-salutetv-at30a6
-        path: ${{ env.WORKSPACE }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
+        name: twrp-salute-at30a6
+        path: result/recovery.img
         retention-days: 30
 
     - name: Create GitHub Release
-      if: success()
-      uses: ncipollo/release-action@v1
+      uses: softprops/action-gh-release@v1
       with:
-        artifacts: ${{ env.WORKSPACE }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
-        name: "TWRP for SaluteTV (at30a6)"
-        tag: "build-${{ github.run_number }}"
+        files: result/recovery.img
+        name: "TWRP 3.7.x for SaluteTV (at30a6)"
+        tag_name: "v${{ github.run_number }}"
         body: |
-          ### 📱 TWRP Recovery for SaluteTV (at30a6)
+          ## 📱 TWRP Recovery for SaluteTV (at30a6)
           
           **Device:** SaluteTV  
           **Codename:** at30a6  
           **Android:** 13  
-          **Architecture:** ARM 32-bit  
+          **Architecture:** ARM 32-bit (armeabi-v7a)  
+          **Platform:** Amlogic  
           
           ### 📦 Installation
           ```bash
@@ -173,7 +146,16 @@ jobs:
           fastboot reboot recovery
           ```
           
-          ### 🔧 Build Info
+          ### 🔧 Build Information
           - **Build Date:** $(date -u +'%Y-%m-%d %H:%M UTC')
-          - **Workflow:** #${{ github.run_number }}
-        token: ${{ secrets.GITHUB_TOKEN }}
+          - **TWRP Branch:** ${{ github.event.inputs.TWRP_BRANCH }}
+          - **Workflow Run:** #${{ github.run_number }}
+          
+          ### 📋 Notes
+          - Tested on SaluteTV firmware v1.100.61-b23081
+          - Includes Amlogic-specific drivers
+          - Supports FBE/FDE encryption
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
