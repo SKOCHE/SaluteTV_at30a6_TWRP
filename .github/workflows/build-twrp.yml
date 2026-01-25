@@ -1,4 +1,4 @@
-name: TWRP Build - WORKING VERSION
+name: TWRP Build for at30a6
 on:
   workflow_dispatch:
   push:
@@ -7,121 +7,130 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
-    - name: Checkout device tree
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-    - name: Install dependencies
+    - name: Setup environment
       run: |
         sudo apt-get update
-        sudo apt-get install -y git-core gnupg flex bison gperf build-essential \
-          zip curl zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 \
-          lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
-          libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3 \
-          python3-pip openjdk-11-jdk ccache
-        
-        # Install repo tool
-        mkdir -p ~/bin
-        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-        chmod a+x ~/bin/repo
-        echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
-        source ~/.bashrc
+        sudo apt-get install -y git python3 openjdk-11-jdk curl bc bison flex gperf zip unzip
+        curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
+        chmod +x ~/repo
+        sudo mv ~/repo /usr/local/bin/
+        /usr/local/bin/repo version
 
-    - name: Initialize and sync
+    - name: Build TWRP
       run: |
-        mkdir twrp && cd twrp
+        echo "=== TWRP BUILD ==="
+        mkdir -p twrp && cd twrp
         
-        # Initialize with depth=1 to save space
-        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
-          -b twrp-11 --depth=1
+        # 1. Initialize
+        /usr/local/bin/repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
         
-        # Create local manifest to skip large projects
+        # 2. Create local manifest to exclude space-heavy projects
         mkdir -p .repo/local_manifests
         cat > .repo/local_manifests/local.xml << 'EOF'
         <?xml version="1.0" encoding="UTF-8"?>
         <manifest>
-          <!-- Remove heaviest projects to save space -->
           <remove-project name="platform/prebuilts/clang/host/linux-x86" />
           <remove-project name="platform/prebuilts/gcc/linux-x86" />
           <remove-project name="platform/prebuilts/ndk" />
           <remove-project name="platform/prebuilts/sdk" />
-          
-          <!-- Add our device tree -->
-          <project path="device/salute/at30a6" 
-                   name="SKOCHE/SaluteTV_at30a6_TWRP"
-                   remote="github"
-                   revision="main" />
         </manifest>
         EOF
         
-        # Sync with optimized settings
-        repo sync -c -j2 \
+        # 3. Sync with space optimization
+        echo "Syncing (this takes 10-20 minutes)..."
+        /usr/local/bin/repo sync -c -j2 \
           --no-tags \
           --no-clone-bundle \
           --optimized-fetch \
-          --force-sync \
-          --fail-fast=false
-
-    - name: Build TWRP
-      run: |
-        cd twrp
+          --fail-fast=false \
+          --force-sync
         
-        # Copy device tree files
+        # 4. Check disk space
+        echo "Disk space after sync:"
+        df -h
+        
+        # 5. Copy device tree
         mkdir -p device/salute/at30a6
-        cp -r ../*.mk ../prebuilt ../recovery device/salute/at30a6/ 2>/dev/null || true
+        for file in ../*.mk; do [ -f "$file" ] && cp "$file" device/salute/at30a6/; done
+        [ -d "../prebuilt" ] && cp -r ../prebuilt device/salute/at30a6/
+        [ -d "../recovery" ] && cp -r ../recovery device/salute/at30a6/
         
-        # Setup environment with fixes
+        echo "Device tree copied:"
+        ls -la device/salute/at30a6/
+        
+        # 6. Setup build environment
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
         export USE_LD=gold
         export BUILD_BROKEN_DUP_RULES=true
-        export BUILD_BROKEN_USES_BUILD_COPY_HEADERS=true
         
         source build/envsetup.sh
         
-        # Try different product names
+        # 7. Select device
         if lunch twrp_at30a6-eng 2>/dev/null; then
-          echo "Using twrp_at30a6-eng"
-        elif lunch omni_at30a6-eng 2>/dev/null; then
-          echo "Using omni_at30a6-eng"
+          echo "Selected: twrp_at30a6-eng"
         else
-          # Manual setup
           export TARGET_DEVICE=at30a6
           export TARGET_PRODUCT=twrp_at30a6
           export TARGET_BUILD_VARIANT=eng
-          echo "Manual setup: $TARGET_PRODUCT"
+          echo "Manual: TARGET_PRODUCT=$TARGET_PRODUCT"
         fi
         
-        # Build recovery
+        # 8. Build
+        echo "Building recovery..."
         make -j2 recoveryimage 2>&1 | tee build.log || {
-          echo "First attempt failed, trying recovery target..."
+          echo "Trying alternative build..."
           make -j2 recovery 2>&1 | tee -a build.log
         }
         
-        # Find and copy result
+        # 9. Find result
         find out -name "recovery.img" -type f 2>/dev/null | head -1 | while read img; do
-          echo "Found recovery.img: $img"
+          echo "Found: $img"
           cp "$img" ../recovery.img
         done
-
-    - name: Check result
-      run: |
-        if [ -f "recovery.img" ]; then
+        
+        # 10. Check result
+        if [ -f "../recovery.img" ]; then
           echo "✅ SUCCESS: TWRP recovery built!"
-          ls -lh recovery.img
-          echo "Size: $(wc -c < recovery.img) bytes"
+          ls -lh ../recovery.img
+          echo "Size: $(wc -c < ../recovery.img) bytes"
         else
           echo "❌ FAILED: No recovery.img found"
-          echo "Build log tail:"
-          tail -50 twrp/build.log 2>/dev/null || echo "No build log"
+          echo "Last 30 lines of build log:"
+          tail -30 build.log 2>/dev/null || echo "No build log"
+          echo "Searching for any images:"
+          find out -name "*.img" -type f 2>/dev/null | head -5
           exit 1
         fi
 
-    - name: Upload artifact
+    - name: Upload TWRP recovery
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP-Recovery
+        name: TWRP-Recovery-at30a6
         path: recovery.img
-        retention-days: 7
+        if-no-files-found: error
+        retention-days: 30
+
+    - name: Create Release
+      if: success() && github.event_name == 'workflow_dispatch'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: recovery.img
+        tag_name: twrp-$(date +%Y%m%d)
+        name: "TWRP $(date +%Y-%m-%d)"
+        body: |
+          # TWRP Recovery for SaluteTV at30a6
+          
+          Built: $(date)
+          
+          ### Installation:
+          ```
+          fastboot flash recovery recovery.img
+          fastboot reboot recovery
+          ```
+        draft: false
