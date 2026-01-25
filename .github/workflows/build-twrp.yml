@@ -7,7 +7,47 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    timeout-minutes:name: TWRP Build
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git python3 openjdk-11-jdk curl bc
+        curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
+        chmod +x ~/repo && sudo mv ~/repo /usr/local/bin/
+    - name: Build
+      run: |
+        mkdir twrp && cd twrp
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
+        mkdir -p .repo/local_manifests
+        cat > .repo/local_manifests/local.xml << 'EOF'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <manifest>
+          <remove-project name="platform/prebuilts/clang/host/linux-x86" />
+          <remove-project name="platform/prebuilts/gcc/linux-x86" />
+        </manifest>
+        EOF
+        repo sync -c -j2 --no-tags --no-clone-bundle
+        mkdir -p device/salute/at30a6
+        cp ../*.mk ../prebuilt/kernel device/salute/at30a6/
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export USE_LD=gold
+        source build/envsetup.sh
+        lunch twrp_at30a6-eng || export TARGET_PRODUCT=twrp_at30a6
+        make -j2 recoveryimage || make -j2 recovery
+        find out -name "recovery.img" -exec cp {} ../recovery.img \;
+        [ -f ../recovery.img ] && echo "✅" || echo "❌"
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: TWRP
+        path: recovery.img 120
 
     steps:
     - uses: actions/checkout@v4
