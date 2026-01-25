@@ -24,27 +24,44 @@ jobs:
     - name: Display Device Tree
       run: |
         echo "📁 Device Tree Structure:"
-        find device-tree -type f | head -20
+        find device-tree -type f -name "*.mk" -o -name "*.prop" -o -name "*.rc" | head -30
         echo ""
-        echo "📋 BoardConfig.mk preview:"
-        head -30 device-tree/device/salute/at30a6/BoardConfig.mk 2>/dev/null || echo "BoardConfig.mk not found"
+        echo "📋 Checking device tree contents..."
+        if [ -d "device-tree/device" ]; then
+          find device-tree/device -type f | head -30
+        else
+          echo "⚠️  No device directory found, checking root..."
+          find device-tree -maxdepth 2 -type f | head -30
+        fi
 
     - name: Setup Docker Build
       run: |
         # Создаем скрипт для сборки внутри Docker
         cat > build.sh << 'EOF'
         #!/bin/bash
-        set -e
+        set -ex  # Включаем отладку
         
         echo "🚀 Starting TWRP build in Docker..."
+        echo "📝 TWRP_BRANCH: $TWRP_BRANCH"
+        echo "📝 DEBUG_LOG: $DEBUG_LOG"
         
         # Устанавливаем переменные окружения
-        export DEBUG_LOG=false
+        export DEBUG_LOG=${DEBUG_LOG:-false}
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
+        export USE_CCACHE=1
+        export CCACHE_EXEC=$(which ccache)
         
         # Переходим в workspace
         cd /workspace
+        echo "📁 Current directory: $(pwd)"
+        ls -la
+        
+        # Очищаем предыдущую инициализацию если есть
+        if [ -d ".repo" ]; then
+          echo "🧹 Cleaning previous repo initialization..."
+          rm -rf .repo
+        fi
         
         # Инициализируем TWRP sources
         echo "📦 Initializing TWRP manifest..."
@@ -55,29 +72,54 @@ jobs:
         echo "🔄 Syncing sources..."
         repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags
         
+        # Проверяем структуру device tree
+        echo "🌲 Checking device tree from /device-tree..."
+        find /device-tree -type f -name "*.mk" | head -10
+        echo "Device tree files:"
+        ls -la /device-tree/ || echo "Cannot list /device-tree"
+        
         # Копируем device tree
-        echo "🌲 Copying device tree..."
+        echo "📥 Copying device tree..."
         mkdir -p device/salute/
+        
+        # Ищем правильный путь к device tree
         if [ -d "/device-tree/device/salute/at30a6" ]; then
-          cp -r /device-tree/device/salute/at30a6 device/salute/
-        elif [ -d "/device-tree" ]; then
-          # Попробуем найти дерево устройств в другой структуре
-          find /device-tree -name "*.mk" -o -name "AndroidProducts.mk" | head -5
-          echo "Looking for device tree structure..."
-          find /device-tree -type d -name "at30a6" | head -3
+          echo "✅ Found device tree at /device-tree/device/salute/at30a6"
+          cp -rv /device-tree/device/salute/at30a6 device/salute/
+        elif [ -d "/device-tree/at30a6" ]; then
+          echo "✅ Found device tree at /device-tree/at30a6"
+          cp -rv /device-tree/at30a6 device/salute/
+        elif [ -f "/device-tree/AndroidProducts.mk" ]; then
+          echo "✅ Found device tree root at /device-tree"
+          cp -rv /device-tree device/salute/at30a6
+        else
+          echo "❌ ERROR: Cannot find device tree structure!"
+          echo "Available in /device-tree:"
+          find /device-tree -type f -name "*.mk" -o -name "AndroidBoard.mk" -o -name "*.rc" | head -20
+          exit 1
         fi
         
-        # Проверяем структуру
-        echo "🔍 Checking device tree..."
-        if [ ! -f "device/salute/at30a6/AndroidProducts.mk" ]; then
-          echo "⚠️  AndroidProducts.mk not found, checking for other files..."
-          find device/salute/at30a6/ -type f 2>/dev/null || echo "Device directory not found"
-        fi
-        
-        if [ ! -f "device/salute/at30a6/BoardConfig.mk" ]; then
-          echo "❌ ERROR: BoardConfig.mk not found!"
-          echo "Searching in workspace..."
-          find . -name "BoardConfig.mk" 2>/dev/null | head -10
+        # Проверяем скопированное дерево
+        echo "🔍 Verifying copied device tree..."
+        if [ -d "device/salute/at30a6" ]; then
+          echo "✅ Device tree directory exists"
+          find device/salute/at30a6 -type f -name "*.mk" | head -10
+          
+          if [ ! -f "device/salute/at30a6/AndroidProducts.mk" ]; then
+            echo "⚠️  AndroidProducts.mk not found, creating symlink if needed..."
+            # Ищем AndroidProducts.mk
+            find device/salute/at30a6 -name "AndroidProducts.mk" | head -5
+          fi
+          
+          if [ ! -f "device/salute/at30a6/BoardConfig.mk" ]; then
+            echo "❌ ERROR: BoardConfig.mk not found!"
+            echo "Files in device/salute/at30a6/:"
+            ls -la device/salute/at30a6/
+            exit 1
+          fi
+        else
+          echo "❌ ERROR: device/salute/at30a6 directory not created!"
+          ls -la device/salute/
           exit 1
         fi
         
@@ -85,91 +127,214 @@ jobs:
         echo "⚙️ Setting up build environment..."
         source build/envsetup.sh
         
+        # Пытаемся определить название устройства для lunch
+        echo "🔎 Determining device name..."
+        DEVICE_NAME=""
+        
+        # Проверяем BoardConfig.mk для имени устройства
+        if grep -q "TW_DEVICE_VERSION" device/salute/at30a6/BoardConfig.mk; then
+          DEVICE_NAME=$(grep "TW_DEVICE_VERSION" device/salute/at30a6/BoardConfig.mk | cut -d'=' -f2 | tr -d ' ' | tr -d '\n')
+          echo "📝 Found device name in BoardConfig.mk: $DEVICE_NAME"
+        fi
+        
+        if [ -z "$DEVICE_NAME" ]; then
+          # Проверяем omni/lineage имя
+          if [ -f "device/salute/at30a6/lineage_at30a6.mk" ]; then
+            DEVICE_NAME="lineage_at30a6"
+          elif [ -f "device/salute/at30a6/twrp_at30a6.mk" ]; then
+            DEVICE_NAME="twrp_at30a6"
+          elif [ -f "device/salute/at30a6/omni_at30a6.mk" ]; then
+            DEVICE_NAME="omni_at30a6"
+          else
+            # Берем первое .mk файл в директории
+            FIRST_MK=$(find device/salute/at30a6 -name "*.mk" | head -1)
+            if [ -n "$FIRST_MK" ]; then
+              DEVICE_NAME=$(basename "$FIRST_MK" .mk)
+            else
+              DEVICE_NAME="at30a6"
+            fi
+          fi
+        fi
+        
+        echo "🎯 Using device name: $DEVICE_NAME"
+        
         # Собираем
         echo "🔨 Building recovery..."
+        
         # Пробуем разные варианты lunch
-        if lunch twrp_at30a6-eng; then
-          echo "✅ Lunch command successful"
-        elif lunch omni_at30a6-eng; then
-          echo "✅ Lunch command successful (omni)"
-        else
-          echo "⚠️  Standard lunch failed, trying to set manually..."
+        LUNCH_SUCCESS=0
+        for LUNCH_OPTION in "${DEVICE_NAME}-eng" "twrp_${DEVICE_NAME}-eng" "omni_${DEVICE_NAME}-eng" "lineage_${DEVICE_NAME}-eng"; do
+          echo "🔄 Trying lunch: $LUNCH_OPTION"
+          if lunch "$LUNCH_OPTION" 2>&1 | tee lunch.log; then
+            echo "✅ Lunch successful with: $LUNCH_OPTION"
+            LUNCH_SUCCESS=1
+            break
+          else
+            echo "❌ Lunch failed with: $LUNCH_OPTION"
+            tail -20 lunch.log
+          fi
+        done
+        
+        if [ $LUNCH_SUCCESS -eq 0 ]; then
+          echo "⚠️  All lunch attempts failed, trying manual setup..."
           export TARGET_DEVICE=at30a6
+          export TARGET_PRODUCT=twrp_at30a6
+          lunch twrp_at30a6-eng || true
         fi
         
         # Собираем recovery
         echo "🛠️  Making recoveryimage..."
-        mka recoveryimage 2>&1 | tee build.log || {
+        if mka recoveryimage 2>&1 | tee build.log; then
+          echo "✅ Build completed"
+        else
           echo "❌ Build failed!"
-          tail -50 build.log
+          echo "Last 100 lines of build log:"
+          tail -100 build.log
+          echo "❌ Build error log:"
+          tail -50 out/error.log 2>/dev/null || echo "No error.log found"
           exit 1
-        }
+        fi
         
         # Проверяем результат
         echo "🔎 Checking build result..."
-        if [ -f "out/target/product/at30a6/recovery.img" ]; then
-          echo "✅ SUCCESS! Recovery built."
-          ls -lh out/target/product/at30a6/recovery.img
-          
-          # Копируем результат
+        
+        # Ищем recovery.img в разных местах
+        RECOVERY_FOUND=0
+        RECOVERY_PATH=""
+        
+        # Стандартные пути
+        PATHS=(
+          "out/target/product/at30a6/recovery.img"
+          "out/target/product/at30a6/recovery/root.img"
+          "out/target/product/*/recovery.img"
+          "out/target/product/*/recovery/root.img"
+          "out/target/product/*/*.img"
+        )
+        
+        for path in "${PATHS[@]}"; do
+          if compgen -G "$path" > /dev/null; then
+            for img in $path; do
+              if [ -f "$img" ]; then
+                echo "✅ Found recovery image: $img"
+                ls -lh "$img"
+                RECOVERY_FOUND=1
+                RECOVERY_PATH="$img"
+                break 2
+              fi
+            done
+          fi
+        done
+        
+        if [ $RECOVERY_FOUND -eq 1 ]; then
+          # Создаем директорию для результата
           mkdir -p /result
-          cp out/target/product/at30a6/recovery.img /result/
-          echo "📋 Copied to /result/"
+          cp "$RECOVERY_PATH" /result/recovery.img
+          echo "📋 Copied to /result/recovery.img"
+          ls -lh /result/
         else
-          echo "⚠️  Recovery not found in standard location, searching..."
-          find out/target/product/ -name "recovery.img" 2>/dev/null || true
-          find out/target/product/ -name "*.img" 2>/dev/null | head -10
+          echo "❌ ERROR: No recovery image found!"
+          echo "Searching for any image files..."
+          find out/target/product/ -name "*.img" 2>/dev/null | while read img; do
+            echo "Found: $img ($(stat -c%s "$img") bytes)"
+          done
+          
+          echo "Build directory structure:"
+          find out/target/product/ -type f -name "*.mk" -o -name "*.log" | head -20
           exit 1
         fi
+        
+        echo "🎉 Build process completed successfully!"
         EOF
         
         chmod +x build.sh
+        echo "📝 Build script created:"
+        head -50 build.sh
 
-    - name: Run Docker Build
+    - name: Run Docker Build with Debug
       run: |
         # Создаем директории
         mkdir -p workspace result
         
-        echo "🐳 Starting Docker build with TWRP_BRANCH=${{ github.event.inputs.TWRP_BRANCH }}"
+        echo "🐳 Starting Docker build..."
+        echo "📦 TWRP Branch: ${{ github.event.inputs.TWRP_BRANCH }}"
         
-        # Запускаем Docker контейнер с исправленной командой
+        # Показываем структуру device tree
+        echo "📁 Device tree contents:"
+        find device-tree -type f -name "*.mk" | head -20
+        
+        # Запускаем Docker контейнер с подробным выводом
         docker run --rm \
           -v "$(pwd)/device-tree:/device-tree:ro" \
           -v "$(pwd)/workspace:/workspace" \
           -v "$(pwd)/result:/result" \
-          -v "$(pwd)/build.sh:/github/workspace/build.sh:ro" \
+          -v "$(pwd)/build.sh:/build.sh:ro" \
           -e TWRP_BRANCH="${{ github.event.inputs.TWRP_BRANCH }}" \
-          -e DEBUG_LOG="false" \
+          -e DEBUG_LOG="true" \
           lineageos4microg/docker-lineage-cicd:latest \
-          /bin/bash -c "cd / && /github/workspace/build.sh"
+          /bin/bash -c "cd / && /build.sh 2>&1 | tee docker_build.log"
         
-        echo "🏁 Docker build completed"
+        echo "🏁 Docker build process completed"
+        
+        # Проверяем логи если есть
+        if [ -f "workspace/build.log" ]; then
+          echo "📋 Last 50 lines of build log:"
+          tail -50 workspace/build.log
+        fi
 
     - name: Check Build Result
       run: |
         echo "🔍 Checking build artifacts..."
+        echo "Result directory:"
         ls -la result/ 2>/dev/null || echo "Result directory not found"
         
+        echo "Workspace directory:"
+        find workspace -name "*.img" 2>/dev/null | head -10
+        
         if [ -f "result/recovery.img" ]; then
-          echo "✅ Recovery image found!"
+          echo "✅ SUCCESS! Recovery image found!"
+          echo "📊 Recovery image details:"
           ls -lh result/recovery.img
           echo "📏 Size: $(stat -c%s result/recovery.img) bytes"
-          echo "📊 MD5: $(md5sum result/recovery.img | cut -d' ' -f1)"
+          echo "🔢 MD5: $(md5sum result/recovery.img | cut -d' ' -f1)"
+          
+          # Проверяем что файл не пустой
+          if [ $(stat -c%s result/recovery.img) -lt 1000000 ]; then
+            echo "⚠️  WARNING: Recovery image seems too small (<1MB)"
+            hexdump -C result/recovery.img | head -20
+          fi
         else
-          echo "❌ No recovery image found in result/"
-          echo "Checking workspace..."
-          find workspace -name "recovery.img" 2>/dev/null || true
+          echo "❌ ERROR: No recovery image found in result/"
+          echo "💡 Debug information:"
+          
+          # Проверяем workspace
+          echo "Looking in workspace..."
+          IMG_FILES=$(find workspace -name "*.img" 2>/dev/null | head -10)
+          if [ -n "$IMG_FILES" ]; then
+            echo "Found image files:"
+            for img in $IMG_FILES; do
+              echo "- $img ($(stat -c%s "$img") bytes)"
+            done
+          fi
+          
+          # Проверяем логи
+          if [ -f "workspace/build.log" ]; then
+            echo "📋 Build log tail:"
+            tail -100 workspace/build.log
+          fi
+          
           exit 1
         fi
 
     - name: Upload Recovery as Artifact
       uses: actions/upload-artifact@v4
+      if: success()
       with:
         name: twrp-salute-at30a6
         path: result/recovery.img
         retention-days: 30
 
     - name: Create GitHub Release
+      if: success()
       uses: softprops/action-gh-release@v1
       with:
         files: result/recovery.img
