@@ -1,0 +1,54 @@
+# .gitignore для SaluteTV_at30a6_TWRP
+
+# 1. Скомпилированные файлы и образы
+*.img
+*.zip
+*.tar
+*.gz
+*.bz2
+*.xz
+
+# 2. Файлы Android сборки
+out/
+obj/
+*.apk
+*.dex
+*.odex
+*.vdex
+*.art
+
+# 3. Файлы логов и временные файлы
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# 4. Резервные копии и патчи
+*.orig
+*.rej
+*.bak
+*.backup
+
+# 5. Локальные настройки
+.local/
+.idea/
+.vscode/
+*.iml
+
+# 6. Файлы ядра (если собираете)
+*.ko
+modules.order
+Module.symvers
+
+# 7. Скрытые файлы системы
+.*.un~
+*.un~
+
+# 8. Исключить prebuilt файлы (если они большие)
+# prebuilt/dt.img     # раскомментируйте если dt.img > 50MB
+# prebuilt/dtbo.img   # раскомментируйте если dtbo.img > 10MB
+# prebuilt/kernel     # раскомментируйте если kernel > 100MB
