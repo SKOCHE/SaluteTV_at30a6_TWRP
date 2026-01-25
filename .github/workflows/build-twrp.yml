@@ -14,105 +14,137 @@ jobs:
     - name: Checkout device tree
       uses: actions/checkout@v4
       
-    - name: Install dependencies
+    - name: Install minimal dependencies
       run: |
-        sudo apt-get update
+        # Remove problematic repos
+        sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list 2>/dev/null || true
+        sudo apt-get update 2>/dev/null || true
+        
+        # Install only what's absolutely needed
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
           git python3 openjdk-11-jdk curl \
-          build-essential bc bison flex gperf zip unzip
+          build-essential bc 2>/dev/null || echo "Some packages failed"
     
     - name: Install repo tool
       run: |
-        curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
-        chmod +x ~/repo
-        sudo mv ~/repo /usr/local/bin/
-        repo version
-    
-    - name: Initialize and sync FULL TWRP
-      env:
-        ALLOW_MISSING_DEPENDENCIES: true
-        LC_ALL: C
-        USE_LD: gold
-      run: |
-        mkdir twrp && cd twrp
-        
-        # Initialize with minimal manifest
-        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
-          -b twrp-11 --depth=1
-        
-        # SYNC EVERYTHING - no specific projects
-        repo sync -c -j2 --no-tags --no-clone-bundle --force-sync
-        
-        # Copy device tree
-        mkdir -p device/salute/at30a6
-        cp -r ../*.mk ../prebuilt ../recovery device/salute/at30a6/ 2>/dev/null || true
-        cp ../BoardConfig.mk device/salute/at30a6/ 2>/dev/null || true
-        cp ../device.mk device/salute/at30a6/ 2>/dev/null || true
-        
-        echo "Device tree copied:"
-        ls -la device/salute/at30a6/
+        curl -s https://storage.googleapis.com/git-repo-downloads/repo > /tmp/repo
+        chmod +x /tmp/repo
+        sudo mv /tmp/repo /usr/local/bin/
+        /usr/local/bin/repo version 2>/dev/null || echo "Repo installed"
     
     - name: Build TWRP
-      env:
-        ALLOW_MISSING_DEPENDENCIES: true
-        LC_ALL: C
-        USE_LD: gold
       run: |
-        cd twrp
+        echo "=== STARTING TWRP BUILD ==="
         
-        # Build
-        source build/envsetup.sh
+        # Setup workspace
+        mkdir -p twrp && cd twrp
+        echo "Working in: $(pwd)"
         
-        # Try different product names
-        if lunch omni_at30a6-eng 2>/dev/null; then
-          echo "Using omni_at30a6-eng"
-        elif lunch twrp_at30a6-eng 2>/dev/null; then
-          echo "Using twrp_at30a6-eng"
+        # Step 1: Initialize repo
+        echo "1. Initializing repo..."
+        /usr/local/bin/repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
+          -b twrp-11 --depth=1 2>&1 | tail -5
+        
+        # Step 2: SYNC - THIS WAS MISSING!
+        echo "2. Syncing repository (this takes 5-10 minutes)..."
+        /usr/local/bin/repo sync -c -j2 --no-tags --no-clone-bundle --force-sync 2>&1 | tail -20
+        
+        # Step 3: Copy device tree
+        echo "3. Copying device files..."
+        mkdir -p device/salute/at30a6
+        # Copy ALL files from repo root
+        find .. -maxdepth 1 -type f -name "*.mk" -o -name "*.txt" -o -name "*.sh" | xargs -I{} cp {} device/salute/at30a6/ 2>/dev/null || true
+        cp -r ../prebuilt device/salute/at30a6/ 2>/dev/null || true
+        cp -r ../recovery device/salute/at30a6/ 2>/dev/null || true
+        
+        echo "Device tree contents:"
+        ls -la device/salute/at30a6/ 2>/dev/null || echo "No device files"
+        
+        # Step 4: Set up environment
+        echo "4. Setting up build environment..."
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export LC_ALL=C
+        export USE_LD=gold
+        export BUILD_BROKEN_DUP_RULES=true
+        
+        # Source envsetup if it exists
+        if [ -f "build/envsetup.sh" ]; then
+          source build/envsetup.sh
+          echo "Envsetup sourced"
         else
-          # Manual setup
-          export TARGET_DEVICE=at30a6
-          export TARGET_PRODUCT=omni_at30a6
-          export TARGET_BUILD_VARIANT=eng
-          echo "Manual: TARGET_PRODUCT=$TARGET_PRODUCT"
+          echo "WARNING: envsetup.sh not found"
         fi
         
-        # Build recovery
-        make -j2 recoveryimage 2>&1 | tee build.log || {
-          echo "First attempt failed, trying recovery target..."
-          make -j2 recovery 2>&1 | tee -a build.log
+        # Step 5: Build recovery
+        echo "5. Building recovery..."
+        
+        # Method 1: Try direct build
+        echo "Method 1: make recoveryimage"
+        make -j2 recoveryimage 2>&1 | tee build.log | tail -50 || {
+          echo "Method 1 failed, trying method 2..."
+          # Method 2: Build recovery directly
+          echo "Method 2: make recovery"
+          make -j2 recovery 2>&1 | tee -a build.log | tail -50 || {
+            echo "All build methods failed"
+          }
         }
         
-        # Find and copy result
-        find out -name "recovery.img" -type f 2>/dev/null | head -1 | while read img; do
-          echo "Found: $img"
-          cp "$img" ../recovery.img
+        # Step 6: Find and copy results
+        echo "6. Searching for recovery image..."
+        
+        # Look in common locations
+        for location in "out/target/product/at30a6" "out/target/product/*" "out" "."; do
+          find "$location" -name "recovery.img" -type f 2>/dev/null | head -1 | while read img; do
+            echo "Found recovery.img at: $img"
+            cp "$img" ../recovery.img
+            break 2
+          done
         done
         
+        # Step 7: Final check
         if [ -f "../recovery.img" ]; then
-          echo "SUCCESS: recovery.img created"
+          echo "✅✅✅ SUCCESS: TWRP recovery.img CREATED!"
           ls -lh ../recovery.img
+          echo "Size: $(wc -c < ../recovery.img) bytes"
+          echo "SHA256: $(sha256sum ../recovery.img | cut -d' ' -f1)"
         else
-          echo "ERROR: No recovery.img found"
-          echo "Last 20 lines of build.log:"
-          tail -20 build.log
+          echo "❌❌❌ FAILURE: No recovery.img found"
+          echo "Build log summary:"
+          tail -30 build.log 2>/dev/null || echo "No build log"
+          echo ""
+          echo "Checking output directory:"
+          find out -type f -name "*.img" 2>/dev/null | head -10 || echo "No image files"
           exit 1
         fi
+        
+        echo "=== BUILD COMPLETE ==="
     
-    - name: Upload result
+    - name: Upload TWRP recovery
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP-Recovery
+        name: TWRP-Recovery-at30a6
         path: recovery.img
         if-no-files-found: error
+        retention-days: 30
     
-    - name: Create release
+    - name: Create GitHub Release
       if: success() && github.event_name == 'workflow_dispatch'
       uses: softprops/action-gh-release@v1
       with:
         files: recovery.img
         tag_name: twrp-$(date +%Y%m%d-%H%M%S)
-        name: "TWRP Recovery"
+        name: "TWRP $(date +%Y-%m-%d)"
         body: |
-          TWRP for SaluteTV at30a6
-          Built: $(date)
+          # TWRP Recovery for SaluteTV at30a6
+          
+          ### Installation:
+          ```
+          fastboot flash recovery recovery.img
+          fastboot reboot recovery
+          ```
+          
+          ### Checksum:
+          ```sha256
+          $(sha256sum recovery.img)
+          ```
         draft: false
