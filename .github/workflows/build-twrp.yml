@@ -1,45 +1,122 @@
-docker run --rm \
-  -v "$(pwd)/device-tree:/root/device:ro" \
-  -v "$(pwd)/workspace:/root/android" \
-  -v "$(pwd)/result:/root/out" \
-  -e TARGET_DEVICE="at30a6" \
-  -e TARGET_PRODUCT="twrp" \
-  ubuntu:22.04 \
-  /bin/bash -c "
-    # 1. Установка базовых зависимостей
-    apt-get update && apt-get install -y \
-        git-core gnupg flex bison build-essential zip curl zlib1g-dev \
-        gcc-multilib g++-multilib libc6-dev-i386 libncurses5 \
-        lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
-        libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3 \
-        repo bc imagemagick ccache schedtool rsync
+name: Build TWRP for at30a6
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
     
-    # 2. Переход в рабочую директорию
-    cd /root/android
-    
-    # 3. Инициализация репозитория TWRP с правильной веткой
-    # Используем twrp-11.0 для Android 11 или twrp-12.1 для Android 12
-    repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --depth=1
-    
-    # 4. Синхронизация исходного кода
-    repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags
-    
-    # 5. Копирование дерева устройства
-    mkdir -p device/salute/
-    cp -r /root/device device/salute/at30a6
-    
-    # 6. Установка дополнительных зависимостей для AOSP
-    apt-get install -y openjdk-11-jdk
-    
-    # 7. Настройка окружения и сборка
-    source build/envsetup.sh
-    export ALLOW_MISSING_DEPENDENCIES=true
-    export LC_ALL=C
-    lunch twrp_at30a6-eng || lunch omni_at30a6-eng
-    
-    # 8. Непосредственно сборка
-    mka recoveryimage
-    
-    # 9. Копирование результата
-    cp out/target/product/at30a6/recovery.img /root/out/ 2>/dev/null || true
-  "
+    steps:
+    - name: Checkout device tree
+      uses: actions/checkout@v4
+      with:
+        repository: SKOCHE/SaluteTV_at30a6_TWRP
+        path: device-tree
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Create workspace and output directories
+      run: |
+        mkdir -p workspace result
+        
+    - name: Build TWRP in Docker
+      run: |
+        echo "🚀 Сборка TWRP для at30a6"
+        
+        # Используем образ Ubuntu 22.04 с установленными зависимостями для сборки AOSP/TWRP
+        docker run --rm \
+          -v "$(pwd)/device-tree:/root/device:ro" \
+          -v "$(pwd)/workspace:/root/android" \
+          -v "$(pwd)/result:/root/out" \
+          -e TARGET_DEVICE="at30a6" \
+          -e TARGET_PRODUCT="twrp" \
+          ubuntu:22.04 \
+          /bin/bash -c "
+            # 1. Установка базовых зависимостей для сборки AOSP/TWRP
+            apt-get update && apt-get install -y \
+                git-core gnupg flex bison build-essential zip curl zlib1g-dev \
+                gcc-multilib g++-multilib libc6-dev-i386 libncurses5 \
+                lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
+                libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3 \
+                repo bc imagemagick ccache schedtool rsync openjdk-11-jdk python-is-python3
+            
+            # 2. Переход в рабочую директорию
+            cd /root/android
+            
+            # 3. Инициализация репозитория TWRP
+            # Используем twrp-12.1 для Android 12 или twrp-11.0 для Android 11
+            # Проверяем доступные ветки
+            repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --depth=1
+            
+            # 4. Синхронизация исходного кода
+            repo sync -c -j\$(nproc --all) --force-sync --no-clone-bundle --no-tags
+            
+            # 5. Копирование дерева устройства
+            mkdir -p device/salute/
+            cp -r /root/device device/salute/at30a6 || cp -r /root/device/* device/salute/at30a6/
+            
+            # 6. Настройка окружения
+            source build/envsetup.sh
+            export ALLOW_MISSING_DEPENDENCIES=true
+            export LC_ALL=C
+            
+            # 7. Подготовка к сборке
+            # Сначала пробуем twrp_at30a6, затем omni_at30a6
+            lunch twrp_at30a6-eng || lunch omni_at30a6-eng || echo \"Не удалось найти конфигурацию устройства\"
+            
+            # 8. Сборка recovery
+            mka recoveryimage || make recoveryimage
+            
+            # 9. Поиск и копирование результата
+            if [ -f \"out/target/product/at30a6/recovery.img\" ]; then
+              cp out/target/product/at30a6/recovery.img /root/out/
+              echo \"✅ Recovery успешно скопирован\"
+            elif [ -f \"out/target/product/at30a6/*.img\" ]; then
+              cp out/target/product/at30a6/*.img /root/out/
+              echo \"✅ Файлы .img скопированы\"
+            else
+              echo \"⚠️ Файл recovery.img не найден. Ищу другие образы...\"
+              find out/target/product/at30a6/ -name \"*.img\" -exec cp {} /root/out/ \;
+            fi
+            
+            # 10. Проверка наличия файлов в результате
+            echo \"Содержимое /root/out/:\"
+            ls -la /root/out/
+          "
+          
+    - name: Check build result
+      run: |
+        echo "📋 Проверка результатов сборки:"
+        if [ -f "result/recovery.img" ]; then
+          echo "✅ SUCCESS: recovery.img создан!"
+          ls -lh "result/recovery.img"
+        elif [ $(ls -1 result/*.img 2>/dev/null | wc -l) -gt 0 ]; then
+          echo "✅ SUCCESS: Найден образ восстановления!"
+          ls -lh result/*.img
+        else
+          echo "❌ FAIL: Файл recovery.img не найден"
+          ls -la result/
+          exit 1
+        fi
+        
+    - name: Upload recovery image
+      uses: actions/upload-artifact@v4
+      with:
+        name: TWRP-at30a6
+        path: result/*.img
+        retention-days: 7
+        
+    - name: Notify success
+      if: success()
+      run: |
+        echo "🎉 TWRP успешно собран для at30a6!"
+        echo "📦 Артефакты доступны для скачивания"
+        
+    - name: Notify failure
+      if: failure()
+      run: |
+        echo "❌ Сборка TWRP не удалась"
+        echo "Проверьте логи выше для деталей ошибки"
