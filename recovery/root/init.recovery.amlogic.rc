@@ -1,0 +1,40 @@
+# init.recovery.amlogic.rc для SaluteTV at30a6
+
+on early-init
+    start ueventd
+    
+on init
+    symlink /dev/block/platform/soc/by-name /dev/block/by-name
+    mkdir /dev/block/platform 0770 root system
+    mkdir /dev/block/platform/soc 0770 root system
+    
+    # Mount partitions
+    mount_all /fstab.amlogic
+    
+    # For Amlogic devices
+    chmod 0666 /dev/amvideocap0
+    chmod 0666 /dev/amvideo*
+    chmod 0666 /dev/amstream*
+    
+    # Enable ADB
+    write /sys/class/android_usb/android0/enable 0
+    write /sys/class/android_usb/android0/idVendor 18D1
+    write /sys/class/android_usb/android0/idProduct D001
+    write /sys/class/android_usb/android0/functions adb
+    write /sys/class/android_usb/android0/enable 1
+    
+    # Set SELinux to permissive
+    setenforce 0
+
+service recovery /sbin/recovery
+    class main
+    seclabel u:r:recovery:s0
+
+service adbd /sbin/adbd --root_seclabel=u:r:su:s0 --device_banner=recovery
+    class main
+    socket adbd stream 660 system system
+    disabled
+    seclabel u:r:adbd:s0
+
+on property:sys.boot_completed=1
+    start adbd
