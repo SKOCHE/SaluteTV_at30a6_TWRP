@@ -1,52 +1,43 @@
-name: FIND Existing Recovery
+name: TWRP Build
 on: workflow_dispatch
 jobs:
-  find:
+  build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 2
+    timeout-minutes: 90
     steps:
     - uses: actions/checkout@v4
-    
-    - name: Search in twrp directory
+    - name: Setup
       run: |
-        echo "=== ПОИСК УЖЕ СОБРАННОГО RECOVERY ==="
-        
-        if [ -d "twrp" ]; then
-          echo "✅ Найдена папка twrp от предыдущей сборки"
-          cd twrp
-          
-          # 1. Показываем структуру
-          echo ""
-          echo "Содержимое out/target/product/:"
-          ls -la out/target/product/ 2>/dev/null || echo "Папка product не найдена"
-          
-          # 2. Ищем ВСЕ .img файлы
-          echo ""
-          echo "ВСЕ найденные .img файлы:"
-          find . -type f -name "*.img" 2>/dev/null | while read img; do
-            SIZE=$(ls -lh "$img" | awk '{print $5}')
-            echo "📁 $img ($SIZE)"
-          done
-          
-          # 3. Копируем recovery.img если нашли
-          find . -type f -name "recovery.img" 2>/dev/null | head -1 | while read img; do
-            echo ""
-            echo "🎉 НАЙДЕН recovery.img: $img"
-            cp "$img" ../recovery_found.img
-            echo "Скопирован как recovery_found.img"
-            ls -lh ../recovery_found.img
-          done
-        else
-          echo "❌ Папка twrp не найдена"
-          echo "Похоже предыдущая сборка не сохранилась"
-        fi
+        sudo apt update && sudo apt install -y git python3 openjdk-11-jdk curl bc
+        curl -s https://storage.googleapis.com/git-repo-downloads/repo > /tmp/repo
+        chmod +x /tmp/repo && sudo mv /tmp/repo /usr/local/bin/
+    - name: Build
+      run: |
+        mkdir twrp && cd twrp
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
+        repo sync -c -j2 --no-tags --no-clone-bundle
+        mkdir -p device/salute/at30a6
+        cp ../*.mk device/salute/at30a6/
+        [ -d "../prebuilt" ] && cp -r ../prebuilt device/salute/at30a6/
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export USE_LD=gold
+        source build/envsetup.sh
+        lunch twrp_at30a6-eng 2>/dev/null || export TARGET_PRODUCT=twrp_at30a6
+        make -j2 recoveryimage || make -j2 recovery
+        find out -name "recovery.img" -exec cp {} ../recovery.img \;
+        [ -f ../recovery.img ] && echo "✅" && ls -lh ../recovery.img || (echo "❌" && exit 1)
     
-    - name: Upload found recovery
-      if: always()
+    # СОХРАНЕНИЕ РЕЗУЛЬТАТА
+    - name: Save TWRP recovery
       uses: actions/upload-artifact@v4
       with:
-        name: Found-Recovery
-        path: |
-          recovery_found.img
-          twrp/out/**/*.img
-        if-no-files-found: ignore
+        name: TWRP-Recovery
+        path: recovery.img
+        retention-days: 30
+    
+    - name: Save complete build directory
+      uses: actions/upload-artifact@v4
+      with:
+        name: TWRP-Full-Build
+        path: twrp/
+        retention-days: 30
