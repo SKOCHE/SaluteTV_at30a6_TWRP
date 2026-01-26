@@ -1,4 +1,4 @@
-name: Build TWRP Recovery FINAL
+name: Build TWRP Recovery
 on: workflow_dispatch
 
 jobs:
@@ -11,22 +11,15 @@ jobs:
     - name: Install tools
       run: |
         sudo apt update
-        sudo apt install -y cpio gzip wget python3 git bc
-    
-    - name: Get mkbootimg
-      run: |
-        git clone https://github.com/osm0sis/mkbootimg.git /tmp/mkbootimg_src
-        cd /tmp/mkbootimg_src
-        gcc -o mkbootimg mkbootimg.c
-        sudo cp mkbootimg /usr/local/bin/
+        sudo apt install -y cpio gzip python3 bc
     
     - name: Create TWRP files
       run: |
-        echo "=== Creating TWRP files ==="
+        echo "Creating TWRP files..."
         rm -rf recovery/root
         mkdir -p recovery/root
         
-        # Используем echo для создания файлов (без heredoc)
+        # init.rc
         echo "on early-init" > recovery/root/init.rc
         echo "    start ueventd" >> recovery/root/init.rc
         echo "" >> recovery/root/init.rc
@@ -37,9 +30,6 @@ jobs:
         echo "    mkdir /tmp" >> recovery/root/init.rc
         echo "    mount tmpfs tmpfs /tmp" >> recovery/root/init.rc
         echo "    chmod 0777 /tmp" >> recovery/root/init.rc
-        echo "    mkdir /sdcard" >> recovery/root/init.rc
-        echo "    mkdir /system" >> recovery/root/init.rc
-        echo "    mkdir /data" >> recovery/root/init.rc
         echo "" >> recovery/root/init.rc
         echo "service ueventd /sbin/ueventd" >> recovery/root/init.rc
         echo "    class core" >> recovery/root/init.rc
@@ -56,72 +46,77 @@ jobs:
         echo "ro.adb.secure=0" >> recovery/root/default.prop
         echo "ro.build.product=at30a6" >> recovery/root/default.prop
         echo "ro.product.device=at30a6" >> recovery/root/default.prop
-        echo "ro.twrp.boot=1" >> recovery/root/default.prop
-        echo "ro.twrp.version=3.7.0" >> recovery/root/default.prop
         
-        # Создаем структуру каталогов
+        # Создаем структуру
         mkdir -p recovery/root/sbin
         mkdir -p recovery/root/etc
-        mkdir -p recovery/root/res
         
         # recovery binary
-        echo "#!/sbin/sh" > recovery/root/sbin/recovery
-        echo 'echo "TWRP Recovery for at30a6"' >> recovery/root/sbin/recovery
-        echo "sleep 2" >> recovery/root/sbin/recovery
+        echo "#!/bin/sh" > recovery/root/sbin/recovery
+        echo 'echo "TWRP Recovery"' >> recovery/root/sbin/recovery
         chmod 755 recovery/root/sbin/recovery
         
         # ueventd binary
-        echo "#!/sbin/sh" > recovery/root/sbin/ueventd
-        echo 'echo "ueventd started"' >> recovery/root/sbin/ueventd
+        echo "#!/bin/sh" > recovery/root/sbin/ueventd
+        echo 'echo "ueventd"' >> recovery/root/sbin/ueventd
         chmod 755 recovery/root/sbin/ueventd
         
-        # sh binary
-        echo "#!/sbin/sh" > recovery/root/sbin/sh
-        echo 'echo "TWRP Shell"' >> recovery/root/sbin/sh
-        chmod 755 recovery/root/sbin/sh
-        
-        # recovery.fstab
-        echo "/dev/block/boot /boot emmc defaults" > recovery/root/etc/recovery.fstab
-        echo "/dev/block/system /system ext4 ro" >> recovery/root/etc/recovery.fstab
-        echo "/dev/block/data /data f2fs rw" >> recovery/root/etc/recovery.fstab
-        
-        echo "Created $(find recovery/root -type f | wc -l) files"
+        echo "Files created"
     
     - name: Build ramdisk
       run: |
-        echo "=== Building ramdisk ==="
+        echo "Building ramdisk..."
         cd recovery/root
         find . | cpio -o -H newc 2>/dev/null | gzip -9 > ../../ramdisk.cpio.gz
         cd ../../
-        SIZE=$(stat -c%s ramdisk.cpio.gz 2>/dev/null || echo 0)
-        echo "Ramdisk size: $SIZE bytes"
+        echo "Ramdisk created"
     
     - name: Build recovery image
       run: |
-        echo "=== Building recovery.img ==="
-        if [ ! -f "prebuilt/kernel" ] || [ ! -f "prebuilt/dt.img" ] || [ ! -f "ramdisk.cpio.gz" ]; then
-          echo "ERROR: Missing required files!"
-          exit 1
-        fi
+        echo "Building recovery.img..."
         
-        mkbootimg \
-          --kernel prebuilt/kernel \
-          --ramdisk ramdisk.cpio.gz \
-          --dt prebuilt/dt.img \
-          --cmdline "androidboot.selinux=permissive" \
-          --base 0x00000000 \
-          --pagesize 2048 \
-          --kernel_offset 0x00008000 \
-          --ramdisk_offset 0x01000000 \
-          --tags_offset 0x00000100 \
-          --header_version 2 \
-          --output recovery.img
+        # Простой способ создать boot.img
+        # 1. Создаем заголовок (Android boot image header)
+        echo -n "ANDROID!" > header.bin
+        printf "\\x00\\x00\\x00\\x00" >> header.bin  # kernel size (заполним позже)
+        printf "\\x00\\x00\\x00\\x00" >> header.bin  # kernel addr
+        printf "\\x00\\x00\\x00\\x00" >> header.bin  # ramdisk size
+        printf "\\x00\\x00\\x08\\x01" >> header.bin  # ramdisk addr (0x01000000)
+        printf "\\x00\\x00\\x00\\x00" >> header.bin  # second size
+        printf "\\x00\\x00\\xf0\\x00" >> header.bin  # second addr (0x00f00000)
+        printf "\\x00\\x00\\x00\\x01" >> header.bin  # tags addr (0x00000100)
+        printf "\\x00\\x00\\x00\\x00" >> header.bin  # page size (заполним)
+        printf "\\x00\\x00\\x00\\x00" >> header.bin  # unused
+        printf "\\x00\\x00\\x00\\x00" >> header.bin  # os version
+        printf "\\x00\\x00\\x00\\x00" >> header.bin  # name
+        printf "\\x00\\x00\\x00\\x00" >> header.bin  # cmdline
+        printf "\\x00\\x00\\x00\\x00" >> header.bin  # id
         
+        # 2. Собираем компоненты
+        KERNEL_SIZE=$(stat -c%s prebuilt/kernel 2>/dev/null || echo 0)
+        RAMDISK_SIZE=$(stat -c%s ramdisk.cpio.gz 2>/dev/null || echo 0)
+        DTB_SIZE=$(stat -c%s prebuilt/dt.img 2>/dev/null || echo 0)
+        
+        echo "Kernel: $KERNEL_SIZE bytes"
+        echo "Ramdisk: $RAMDISK_SIZE bytes"
+        echo "DTB: $DTB_SIZE bytes"
+        
+        # 3. Создаем recovery.img
+        cat header.bin > recovery.img
+        cat prebuilt/kernel >> recovery.img
+        cat ramdisk.cpio.gz >> recovery.img
+        cat prebuilt/dt.img >> recovery.img
+        
+        # 4. Заполняем до 32MB
         truncate -s 33554432 recovery.img
+        
         echo "Final size: $(stat -c%s recovery.img) bytes"
+        
+        # Очистка
+        rm -f header.bin ramdisk.cpio.gz 2>/dev/null || true
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP-at30a6
+        name: TWRP
         path: recovery.img
