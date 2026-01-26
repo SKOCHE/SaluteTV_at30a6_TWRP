@@ -82,7 +82,7 @@ BOARD_PREBUILT_DTBOIMAGE := device/salute/at30a6/prebuilt/dtbo.img
 BOARD_DTBOIMG_PARTITION_SIZE := 8388608  # 8MB
 
 # ------------------------------------------------------------
-# РАЗМЕРЫ РАЗДЕЛОВ (CRITICAL - должны совпадать с прошивкой)
+# РАЗМЕРЫ РАЗДЕЛОВ И VENDOR НАСТРОЙКИ (ВСЁ В ОДНОМ МЕСТЕ)
 # ------------------------------------------------------------
 BOARD_BOOTIMAGE_PARTITION_SIZE := 67108864        # 64MB
 BOARD_RECOVERYIMAGE_PARTITION_SIZE := 33554432    # 32MB для recovery
@@ -91,16 +91,10 @@ BOARD_USERDATAIMAGE_PARTITION_SIZE := 12884901888 # 12GB
 BOARD_CACHEIMAGE_PARTITION_SIZE := 268435456      # 256MB
 BOARD_FLASH_BLOCK_SIZE := 4096                    # Для eMMC
 
-TARGET_COPY_OUT_VENDOR := vendor
+# VENDOR РАЗДЕЛ - КРИТИЧЕСКИ ВАЖНО: ОДНО ОПРЕДЕЛЕНИЕ В НАЧАЛЕ СЕКЦИИ
+BOARD_VENDORIMAGE_PARTITION_SIZE := 268435456     # 256MB
 BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
-BOARD_VENDORIMAGE_PARTITION_SIZE := 268435456      # 256MB
-
-# Определяем, что устройство имеет vendor раздел
 TARGET_COPY_OUT_VENDOR := vendor
-BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
-TARGET_COPY_OUT_VENDOR := vendor  # Явное определение
-
-# ============================================================
 
 # ------------------------------------------------------------
 # ФАЙЛОВЫЕ СИСТЕМЫ
@@ -246,4 +240,3 @@ BOARD_VENDOR_KERNEL_MODULES :=
 # Указываем, что это устройство TV
 TARGET_USES_TV := true
 TARGET_SUPPORTS_ANDROID_TV := true
-
