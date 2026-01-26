@@ -5,82 +5,114 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-  workflow_dispatch: # Ручной запуск
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 180 # 3 часа максимум
+    timeout-minutes: 180
     
     steps:
     - name: Checkout device tree
       uses: actions/checkout@v4
       with:
         path: device/twrp/at30a6
-        fetch-depth: 0
 
-    - name: Setup environment
+    - name: Setup environment and install dependencies
       run: |
-        # Установка зависимостей
+        # Обновление репозиториев
         sudo apt-get update
+        
+        # Установка основных зависимостей для сборки Android
         sudo apt-get install -y \
           git-core gnupg flex bison build-essential zip curl zlib1g-dev \
           gcc-multilib g++-multilib libc6-dev-i386 lib32ncurses5-dev \
           x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev \
           libxml2-utils xsltproc unzip fontconfig python3 python-is-python3 \
-          openjdk-11-jdk bc lz4 mkbootimg unmkbootimg abootimg \
-          libssl-dev rsync schedtool squashfs-tools imagemagick ccache
+          openjdk-11-jdk bc lz4 libssl-dev rsync schedtool squashfs-tools \
+          imagemagick ccache git-lfs repo p7zip-full p7zip-rar cpio \
+          gperf libncurses5-dev libncursesw5-dev libreadline-dev libffi-dev \
+          libxml2-dev libelf-dev libiberty-dev lzma-dev lzma \
+          liblz4-tool liblzma-dev zlib1g-dev libbz2-dev libfl-dev \
+          libssl-dev libcap-dev libpam0g-dev libnuma-dev
         
-        # Настройка ccache для ускорения
+        # Установка mkbootimg и unmkbootimg из репозитория LineageOS
+        # Сначала установим необходимые зависимости для их сборки
+        sudo apt-get install -y libc6-dev-i386
+        
+        # Скачиваем и компилируем mkbootimg/unmkbootimg
+        mkdir -p /tmp/android-tools
+        cd /tmp/android-tools
+        git clone https://github.com/osm0sis/mkbootimg.git
+        cd mkbootimg
+        make
+        sudo cp mkbootimg unmkbootimg /usr/local/bin/
+        
+        # Проверяем установку
+        which mkbootimg && mkbootimg --version || echo "mkbootimg installed"
+        which unmkbootimg && echo "unmkbootimg installed"
+        
+        # Альтернативно можно установить abootimg (есть в репозиториях)
+        sudo apt-get install -y abootimg
+        
+        # Настройка ccache
         echo "CCACHE_DIR=/tmp/ccache" >> $GITHUB_ENV
         echo "USE_CCACHE=1" >> $GITHUB_ENV
         echo "CCACHE_EXEC=$(which ccache)" >> $GITHUB_ENV
         echo "CCACHE_SIZE=20G" >> $GITHUB_ENV
         ccache -M 20G
         
-        # Создание симлинка python -> python3
+        # Создание симлинков
         sudo ln -sf /usr/bin/python3 /usr/bin/python
 
     - name: Initialize TWRP source
       run: |
+        # Настройка git
+        git config --global user.email "github-actions@github.com"
+        git config --global user.name "GitHub Actions"
+        
         # Скачивание TWRP манифеста
+        mkdir -p twrp-build
+        cd twrp-build
         repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
           -b twrp-13 \
           --depth=1
         
-        # Синхронизация репозиториев (только необходимое)
+        # Копирование device tree в правильное место перед синхронизацией
+        mkdir -p device/twrp/
+        cp -r ../device/twrp/at30a6 device/twrp/
+        
+        # Проверка наличия пребилтов
+        if [ ! -f "device/twrp/at30a6/prebuilt/kernel" ]; then
+          echo "❌ ERROR: Kernel not found in device/twrp/at30a6/prebuilt/kernel"
+          echo "Contents of device/twrp/at30a6/prebuilt/:"
+          ls -la device/twrp/at30a6/prebuilt/ || true
+          exit 1
+        fi
+        
+        # Синхронизация репозиториев
+        echo "Starting repo sync..."
         repo sync -c -j$(nproc --all) \
           --force-sync \
           --no-clone-bundle \
           --no-tags \
           --optimized-fetch \
           --prune
-        
-        # Копирование device tree на правильное место
-        mkdir -p device/twrp/
-        cp -r device/twrp/at30a6 device/twrp/at30a6/
-        
-        # Убедимся, что пребилты на месте
-        if [ -f "device/twrp/at30a6/prebuilt/kernel" ]; then
-          echo "Kernel found, size: $(stat -c%s device/twrp/at30a6/prebuilt/kernel) bytes"
-        else
-          echo "ERROR: Kernel not found!"
-          exit 1
-        fi
-        
-        if [ -f "device/twrp/at30a6/prebuilt/dt.img" ]; then
-          echo "DTB found, size: $(stat -c%s device/twrp/at30a6/prebuilt/dt.img) bytes"
-        else
-          echo "WARNING: DTB not found!"
-        fi
 
     - name: Setup build environment
       run: |
-        # Установка переменных окружения
+        cd twrp-build
+        
+        # Инициализация среды сборки
         source build/envsetup.sh
         
-        # Выбор устройства
-        lunch twrp_at30a6-eng
+        # Проверка доступных целей
+        echo "Available lunch targets:"
+        lunch 2>&1 | grep "twrp_" || true
+        
+        # Выбор устройства (должно соответствовать PRODUCT_DEVICE из twrp_at30a6.mk)
+        export ALLOW_MISSING_DEPENDENCIES=true
+        lunch twrp_at30a6-eng || lunch omni_at30a6-eng
         
         # Проверка конфигурации
         echo "========================================"
@@ -89,15 +121,17 @@ jobs:
         echo "TARGET_DEVICE: $TARGET_DEVICE"
         echo "OUT_DIR: $OUT"
         echo "========================================"
-        
-        # Проверка BoardConfig.mk
-        echo "Checking BoardConfig.mk values:"
-        grep -E "(BOARD_KERNEL|BOARD_RAMDISK|BOARD_PAGESIZE)" device/twrp/at30a6/BoardConfig.mk || true
 
     - name: Build recovery image
       run: |
-        # Запуск сборки (только recovery)
-        mka recoveryimage -j$(nproc --all)
+        cd twrp-build
+        
+        # Очистка предыдущих сборок (опционально)
+        # mka clean
+        
+        # Запуск сборки
+        echo "Starting build with $(nproc --all) threads..."
+        mka recoveryimage -j$(nproc --all) 2>&1 | tee build.log
         
         # Проверка результата
         if [ -f "$OUT/recovery.img" ]; then
@@ -105,37 +139,40 @@ jobs:
           echo "File size: $(stat -c%s $OUT/recovery.img) bytes"
           echo "Location: $OUT/recovery.img"
           
-          # Проверка образа
-          echo "Checking image structure:"
+          # Быстрая проверка образа
+          echo "Image info:"
           file $OUT/recovery.img || true
           
-          # Попытка распаковать для проверки
-          if command -v unpackbootimg &> /dev/null; then
-            mkdir -p /tmp/test-unpack
-            cd /tmp/test-unpack
-            unpackbootimg -i $OUT/recovery.img -o test 2>/dev/null && echo "✅ Image can be unpacked" || echo "⚠️  Image unpacking failed"
-          fi
+          # Сохраняем лог сборки
+          cp build.log $OUT/build.log
         else
-          echo "❌ ERROR: Recovery image not found!"
-          ls -la $OUT/
+          echo "❌ ERROR: Recovery image not found in $OUT/"
+          echo "Checking output directory:"
+          ls -la $OUT/ || true
+          
+          # Показываем последние ошибки из лога
+          echo "Last 50 lines of build log:"
+          tail -50 build.log || true
+          
           exit 1
         fi
 
-    - name: Upload recovery image
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP-recovery-at30a6
+        name: TWRP-at30a6-$(date +%Y%m%d-%H%M%S)
         path: |
-          ${{ github.workspace }}/out/target/product/at30a6/recovery.img
-          ${{ github.workspace }}/out/target/product/at30a6/kernel
-          ${{ github.workspace }}/out/target/product/at30a6/dt.img
+          twrp-build/out/target/product/at30a6/recovery.img
+          twrp-build/out/target/product/at30a6/kernel
+          twrp-build/out/target/product/at30a6/dt.img
+          twrp-build/out/target/product/at30a6/build.log
         retention-days: 7
         if-no-files-found: error
 
-    - name: Create release (optional)
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
+    - name: Upload build log on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
       with:
-        files: ${{ github.workspace }}/out/target/product/at30a6/recovery.img
-        draft: false
-        prerelease: false
+        name: Build-Logs-Failed
+        path: twrp-build/build.log
+        retention-days: 7
