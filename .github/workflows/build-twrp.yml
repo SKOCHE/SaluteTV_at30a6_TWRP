@@ -1,156 +1,67 @@
-name: TWRP Build
+name: Build TWRP from components
 on: workflow_dispatch
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    timeout-minutes: 30
+    
     steps:
     - uses: actions/checkout@v4
     
-    - name: Setup environment
+    - name: Install tools
       run: |
-        sudo apt update && sudo apt install -y \
-          git python3 openjdk-11-jdk curl bc \
-          libssl-dev build-essential \
-          coreutils  # для truncate
-        curl -s https://storage.googleapis.com/git-repo-downloads/repo > /tmp/repo
-        chmod +x /tmp/repo && sudo mv /tmp/repo /usr/local/bin/
+        sudo apt update
+        sudo apt install -y \
+          cpio gzip python3 android-sdk-libsparse-utils \
+          coreutils
     
-    - name: Build TWRP
+    - name: Download mkbootimg
       run: |
-        mkdir twrp && cd twrp
-        
-        # Инициализация репозитория
-        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
-        repo sync -c -j2 --no-tags --no-clone-bundle
-        
-        # Копирование device tree
-        mkdir -p device/salute/at30a6
-        cp ../*.mk device/salute/at30a6/
-        [ -d "../prebuilt" ] && cp -r ../prebuilt device/salute/at30a6/
-        [ -f "../recovery.fstab" ] && cp ../recovery.fstab device/salute/at30a6/
-        [ -f "../mkbootimg.mk" ] && cp ../mkbootimg.mk device/salute/at30a6/
-        
-        # Сборка
-        export ALLOW_MISSING_DEPENDENCIES=true
-        export USE_LD=gold
-        source build/envsetup.sh
-        lunch twrp_at30a6-eng 2>/dev/null || export TARGET_PRODUCT=twrp_at30a6
-        
-        # Собираем ramdisk и recovery
-        make -j2 recoveryimage 2>&1 | tail -100 || make -j2 recovery 2>&1 | tail -100
-        
-        echo "=== Проверка результатов сборки ==="
-        echo "Содержимое out/target/product/at30a6/:"
-        ls -la out/target/product/at30a6/ 2>/dev/null || echo "Директория не создана"
-        
-        echo "=== Создание правильного recovery.img 32 МБ ==="
-        
-        # 1. Ищем компоненты
-        KERNEL="device/salute/at30a6/prebuilt/kernel"
-        DTB="device/salute/at30a6/prebuilt/dt.img"
-        RAMDISK=""
-        
-        # Ищем ramdisk
-        for ramdisk in out/target/product/at30a6/ramdisk-recovery.cpio.gz \
-                       out/target/product/at30a6/recovery/root/ramdisk-recovery.cpio.gz \
-                       $(find . -name "ramdisk-recovery.cpio.gz" -type f 2>/dev/null | head -1); do
-            if [ -f "$ramdisk" ]; then
-                RAMDISK="$ramdisk"
-                echo "Найден ramdisk: $ramdisk"
-                break
-            fi
-        done
-        
-        if [ -z "$RAMDISK" ]; then
-            echo "⚠️ Ramdisk не найден, создаем из recovery/root"
-            if [ -d "out/target/product/at30a6/recovery/root" ]; then
-                cd out/target/product/at30a6/recovery/root
-                find . | cpio -o -H newc | gzip > ../../../ramdisk-recovery.cpio.gz
-                cd ../../../../../
-                RAMDISK="out/target/product/at30a6/ramdisk-recovery.cpio.gz"
-            fi
-        fi
-        
-        if [ ! -f "$KERNEL" ]; then
-            echo "❌ Ошибка: kernel не найден"
-            find . -name "kernel" -o -name "zImage" -type f 2>/dev/null | head -5
-            exit 1
-        fi
-        
-        if [ ! -f "$DTB" ]; then
-            echo "❌ Ошибка: dt.img не найден"
-            exit 1
-        fi
-        
-        if [ ! -f "$RAMDISK" ]; then
-            echo "❌ Ошибка: ramdisk не найден"
-            exit 1
-        fi
-        
-        # 2. Создаем recovery.img через mkbootimg
-        echo "Создаем recovery.img с помощью mkbootimg..."
-        out/host/linux-x86/bin/mkbootimg \
-            --kernel "$KERNEL" \
-            --ramdisk "$RAMDISK" \
-            --dt "$DTB" \
-            --cmdline "androidboot.selinux=permissive" \
-            --base 0x00000000 \
-            --pagesize 2048 \
-            --kernel_offset 0x00008000 \
-            --ramdisk_offset 0x01000000 \
-            --tags_offset 0x00000100 \
-            --header_version 2 \
-            --output ../recovery-raw.img
-        
-        # 3. Проверяем и заполняем до 32 МБ
-        echo "Размер до заполнения: $(stat -c%s ../recovery-raw.img 2>/dev/null || echo 0) байт"
-        
-        # Заполняем до 32 МБ (33554432 байт)
-        echo "Заполняем до 33554432 байт (32 МБ)..."
-        truncate -s 33554432 ../recovery-raw.img 2>/dev/null || \
-            dd if=/dev/zero bs=1 count=0 seek=33554432 of=../recovery-raw.img 2>/dev/null
-        
-        # Переименовываем
-        mv ../recovery-raw.img ../recovery.img
-        
-        # 4. Проверяем результат
-        echo "=== ИТОГ ==="
-        if [ -f "../recovery.img" ]; then
-            SIZE=$(stat -c%s ../recovery.img 2>/dev/null || echo 0)
-            echo "✅ recovery.img создан"
-            echo "Размер: $SIZE байт"
-            echo "Ожидаемый: 33554432 байт (32 МБ)"
-            
-            if [ $SIZE -eq 33554432 ]; then
-                echo "✓ Размер корректен!"
-            else
-                echo "⚠️ Размер неверный, но файл создан"
-            fi
-            
-            # Проверяем структуру
-            echo "Проверка структуры образа:"
-            out/host/linux-x86/bin/mkbootimg --info ../recovery.img 2>&1 | head -20 || \
-                echo "Не удалось прочитать информацию (нормально для заполненного образа)"
-        else
-            echo "❌ Ошибка: recovery.img не создан"
-            exit 1
-        fi
+        # Скачиваем готовый mkbootimg
+        wget -q https://github.com/osm0sis/mkbootimg/releases/download/2024.02.02/mkbootimg -O mkbootimg
+        chmod +x mkbootimg
+        sudo mv mkbootimg /usr/local/bin/
     
-    - name: Upload TWRP recovery
+    - name: Build recovery.img from components
+      run: |
+        echo "=== Сборка recovery.img из компонентов ==="
+        
+        # Создаем ramdisk из готовых файлов TWRP
+        if [ -d "recovery/root" ]; then
+          echo "Создаем ramdisk из recovery/root..."
+          cd recovery/root
+          find . | cpio -o -H newc | gzip > ../../ramdisk.cpio.gz
+          cd ../../
+        fi
+        
+        # Проверяем компоненты
+        echo "Компоненты:"
+        ls -lh prebuilt/kernel
+        ls -lh prebuilt/dt.img
+        ls -lh ramdisk.cpio.gz 2>/dev/null || echo "ramdisk не найден"
+        
+        # Собираем образ
+        mkbootimg \
+          --kernel prebuilt/kernel \
+          --ramdisk ramdisk.cpio.gz \
+          --dt prebuilt/dt.img \
+          --cmdline "androidboot.selinux=permissive" \
+          --base 0x00000000 \
+          --pagesize 2048 \
+          --kernel_offset 0x00008000 \
+          --ramdisk_offset 0x01000000 \
+          --tags_offset 0x00000100 \
+          --header_version 2 \
+          --output recovery-raw.img
+        
+        # Заполняем до 32MB
+        truncate -s 33554432 recovery-raw.img
+        mv recovery-raw.img recovery.img
+        
+        echo "✅ Готово! Размер: $(stat -c%s recovery.img) байт"
+    
+    - name: Upload recovery
       uses: actions/upload-artifact@v4
       with:
         name: TWRP-32MB
         path: recovery.img
-        retention-days: 7
-        compression-level: 0  # без сжатия для .img файлов
-    
-    - name: Upload debug info
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: Build-Logs
-        path: |
-          twrp/out/error.log
-          twrp/build.log
-        retention-days: 1
