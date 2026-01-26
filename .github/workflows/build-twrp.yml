@@ -8,7 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: 120  # Увеличил таймаут
 
     steps:
     - name: Checkout Device Tree
@@ -16,19 +16,43 @@ jobs:
       with:
         path: device_tree
 
-    - name: Setup Build Environment
+    - name: Setup Build Environment & Install Tools
       run: |
-        # 1. Клонируем минимальный манифест TWRP
-        git clone https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git twrp_build -b twrp-12.1 --depth=1
+        # 1. Устанавливаем ВСЕ необходимые инструменты
+        sudo apt-get update -y
+        sudo apt-get install -y \
+          git-core gnupg flex bison build-essential zip \
+          curl zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 \
+          lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
+          libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3 \
+          repo  # <-- КРИТИЧЕСКИ ВАЖНО: Устанавливаем repo
+        
+        # 2. Настраиваем git (иначе repo ругается)
+        git config --global user.email "builder@github.com"
+        git config --global user.name "GitHub Builder"
+        git config --global color.ui false
+
+        # 3. Клонируем минимальный манифест TWRP (используем более свежую ветку twrp-14.0)
+        git clone https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git twrp_build -b twrp-14.0 --depth=1
         cd twrp_build
         
-        # 2. Создаем правильный путь для устройства
+        # 4. Создаем правильный путь для устройства
         mkdir -p device/salute
-        cp -r ../device_tree device/salute/at30a6
+        cp -r ../device_tree/* device/salute/at30a6/
+
+    - name: Initialize Repo and Sync
+      run: |
+        cd twrp_build
         
-        # 3. Инициализируем и синхронизируем (это может занять время)
-        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --depth=1
-        repo sync -c -j$(nproc) --no-tags --no-clone-bundle
+        # 1. Инициализируем repo
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-14.0 --depth=1
+        
+        # 2. Синхронизируем репозитории (может занять 10-15 минут)
+        repo sync -c -j$(nproc) --no-tags --no-clone-bundle --force-sync
+        
+        # 3. Проверяем, что дерево устройств на месте
+        echo "=== Проверка структуры ==="
+        ls -la device/salute/at30a6/
 
     - name: Build Recovery
       run: |
@@ -37,17 +61,51 @@ jobs:
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
         
+        # Настраиваем окружение сборки
         source build/envsetup.sh
-        lunch twrp_at30a6-userdebug
+        
+        # Пытаемся запустить lunch, если не найдено - создаем вручную
+        if lunch twrp_at30a6-userdebug 2>/dev/null; then
+          echo "Устройство найдено в lunch"
+        else
+          echo "Создаем конфигурацию вручную..."
+          # Добавляем устройство вручную
+          export TARGET_DEVICE=at30a6
+          export TARGET_PRODUCT=twrp_at30a6
+        fi
         
         # Собираем только recovery
-        mka recoveryimage
+        echo "=== Начинаем сборку recovery ==="
+        mka recoveryimage 2>&1 | tee build.log
+        
+        # Проверяем результат
+        if [ -f out/target/product/at30a6/recovery.img ]; then
+          echo "✅ SUCCESS: recovery.img создан!"
+          ls -lh out/target/product/at30a6/recovery.img
+        else
+          echo "❌ FAIL: recovery.img не найден"
+          echo "Последние строки лога:"
+          tail -50 build.log
+          exit 1
+        fi
 
     - name: Upload Artifacts
+      if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP-Recovery-at30a6
+        name: TWRP-at30a6-Artifacts
         path: |
           twrp_build/out/target/product/at30a6/recovery.img
-          twrp_build/out/target/product/at30a6/recovery.log
+          twrp_build/build.log
+          twrp_build/device/salute/at30a6/BoardConfig.mk
         retention-days: 7
+
+    - name: Upload Build Log on Failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: Build-Failure-Logs
+        path: |
+          twrp_build/build.log
+          twrp_build/device/salute/at30a6/*
+        retention-days: 30
