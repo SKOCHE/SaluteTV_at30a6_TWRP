@@ -14,14 +14,27 @@ jobs:
     timeout-minutes: 180
 
     steps:
-    # Шаг 1: Установка зависимостей
-    - name: Install dependencies
+    # Шаг 0: Очистка диска перед началом
+    - name: Clean disk space
+      run: |
+        echo "=== Очистка диска ==="
+        df -h
+        sudo apt clean
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf "/usr/local/share/boost"
+        sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+        df -h
+
+    # Шаг 1: Установка только необходимых зависимостей
+    - name: Install minimal dependencies
       run: |
         sudo apt update
-        sudo apt install -y git openjdk-17-jdk ccache python3 \
-          gcc-multilib g++-multilib libc6-dev libncurses-dev \
-          libxml2-utils xsltproc bc bison flex curl lzop \
-          pngcrush squashfs-tools zip unzip
+        sudo apt install -y --no-install-recommends \
+          git openjdk-17-jdk python3 \
+          gcc-multilib g++-multilib libc6-dev \
+          libxml2-utils xsltproc bc bison flex curl \
+          lzop pngcrush squashfs-tools zip unzip
         
     # Шаг 2: Установка repo
     - name: Install repo tool
@@ -30,51 +43,82 @@ jobs:
         chmod a+x ~/repo
         sudo mv ~/repo /usr/local/bin/
 
-    # Шаг 3: Инициализация TWRP
-    - name: Initialize TWRP source
+    # Шаг 3: Минимальная инициализация TWRP
+    - name: Initialize minimal TWRP source
       run: |
         mkdir twrp
         cd twrp
-        /usr/local/bin/repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
-          -b twrp-12.1 \
-          --depth=1
-        /usr/local/bin/repo sync -c -j2 --no-tags --no-clone-bundle
+        
+        # Только манифест
+        git clone https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git .repo/manifests -b twrp-12.1 --depth=1
+        
+        # Минимальный local_manifest только для сборки recovery
+        mkdir -p .repo/local_manifests
+        cat > .repo/local_manifests/local.xml << 'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <remote name="github" fetch="https://github.com" />
+  
+  <!-- Минимальные проекты для сборки recovery -->
+  <project path="build/make" name="android_build" remote="github" revision="twrp-12.1" clone-depth="1" />
+  <project path="bootable/recovery" name="android_bootable_recovery" remote="github" revision="twrp-12.1" clone-depth="1" />
+  <project path="system/core" name="android_system_core" remote="github" revision="twrp-12.1" clone-depth="1" />
+  <project path="frameworks/base" name="android_frameworks_base" remote="github" revision="twrp-12.1" clone-depth="1" />
+  <project path="bionic" name="android_bionic" remote="github" revision="twrp-12.1" clone-depth="1" />
+</manifest>
+XML
+        
+        # Синхронизация только указанных проектов
+        /usr/local/bin/repo sync -c -j2 --no-tags --no-clone-bundle --current-branch
 
     # Шаг 4: Копирование дерева устройства
     - name: Copy device tree
       run: |
         mkdir -p twrp/device/salute/${{ github.event.inputs.device_codename }}
-        # Копируем ВСЁ
-        cp -r * twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
-        cp -r .* twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
+        # Копируем только файлы .mk и recovery
+        cp *.mk recovery.fstab twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
+        if [ -d "recovery" ]; then
+          cp -r recovery twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
+        fi
+        if [ -d "prebuilt" ]; then
+          cp -r prebuilt twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
+        fi
 
     # Шаг 5: Исправление libbinder
     - name: Fix libbinder error
       run: |
         cd twrp
-        sed -i '/version_script: "libbinder.map.txt"/d' frameworks/native/libs/binder/Android.bp 2>/dev/null || true
+        # Если файл существует - исправляем
+        if [ -f "frameworks/native/libs/binder/Android.bp" ]; then
+          sed -i '/version_script: "libbinder.map.txt"/d' frameworks/native/libs/binder/Android.bp
+        fi
 
-    # Шаг 6: Прямая сборка БЕЗ lunch
-    - name: Build recovery directly
+    # Шаг 6: Сборка с очисткой кеша
+    - name: Build recovery
       run: |
         cd twrp
         
-        # Экспорт переменных
+        # Очистка места перед сборкой
+        ccache -C
+        rm -rf out/.lock
+        
+        # Сборка
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
-        export TARGET_DEVICE=${{ github.event.inputs.device_codename }}
-        export TARGET_PRODUCT=twrp_${{ github.event.inputs.device_codename }}
-        
-        # Инициализация окружения
         source build/envsetup.sh
+        lunch twrp_${{ github.event.inputs.device_codename }}-eng
+        make clean
+        make recoveryimage -j2
         
-        # Вместо lunch устанавливаем переменные напрямую
-        export TARGET_BUILD_VARIANT=eng
-        export TARGET_BUILD_TYPE=release
-        
-        echo "=== Собираю recoveryimage ==="
-        make -j2 recoveryimage
-        
+        # Проверяем результат
+        if [ -f "out/target/product/${{ github.event.inputs.device_codename }}/recovery.img" ]; then
+          echo "=== УСПЕХ! Recovery.img создан ==="
+          ls -lh out/target/product/${{ github.event.inputs.device_codename }}/recovery.img
+        else
+          echo "=== ОШИБКА! Recovery.img не создан ==="
+          find out -name "*.img" | head -10
+        fi
+
     # Шаг 7: Загрузка
     - name: Upload recovery image
       if: success()
