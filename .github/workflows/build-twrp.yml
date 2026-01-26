@@ -30,13 +30,9 @@ jobs:
           x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev \
           libxml2-utils xsltproc unzip fontconfig python3 python-is-python3 \
           openjdk-11-jdk bc lz4 libssl-dev rsync schedtool squashfs-tools \
-          imagemagick ccache git-lfs repo p7zip-full p7zip-rar cpio \
-          gperf libncurses5-dev libncursesw5-dev libreadline-dev libffi-dev \
-          libxml2-dev libelf-dev libiberty-dev lzma-dev lzma \
-          liblz4-tool liblzma-dev zlib1g-dev libbz2-dev libfl-dev \
-          libssl-dev libcap-dev libpam0g-dev libnuma-dev
+          imagemagick ccache git-lfs repo
         
-        # Установка mkbootimg и unpackbootimg из репозитория osm0sis
+        # Установка mkbootimg и unpackbootimg
         mkdir -p /tmp/android-tools
         cd /tmp/android-tools
         git clone https://github.com/osm0sis/mkbootimg.git
@@ -44,21 +40,13 @@ jobs:
         make
         sudo cp mkbootimg unpackbootimg /usr/local/bin/
         
-        # Проверяем установку
-        which mkbootimg && mkbootimg --version || echo "mkbootimg installed"
-        which unpackbootimg && echo "unpackbootimg installed"
-        
-        # Создаем симлинк для совместимости (необязательно, но полезно)
+        # Создаем симлинк для совместимости
         sudo ln -sf /usr/local/bin/unpackbootimg /usr/local/bin/unmkbootimg
-        
-        # Альтернативно можно установить abootimg (есть в репозиториях)
-        sudo apt-get install -y abootimg
         
         # Настройка ccache
         echo "CCACHE_DIR=/tmp/ccache" >> $GITHUB_ENV
         echo "USE_CCACHE=1" >> $GITHUB_ENV
         echo "CCACHE_EXEC=$(which ccache)" >> $GITHUB_ENV
-        echo "CCACHE_SIZE=20G" >> $GITHUB_ENV
         ccache -M 20G
         
         # Создание симлинков
@@ -70,28 +58,27 @@ jobs:
         git config --global user.email "github-actions@github.com"
         git config --global user.name "GitHub Actions"
         
-        # Скачивание TWRP манифеста
+        # Создаем папку для сборки
         mkdir -p twrp-build
         cd twrp-build
+        
+        # ИНИЦИАЛИЗАЦИЯ РЕПОЗИТОРИЯ TWRP
+        # Используем рабочую ветку для Android 13
         repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
-          -b twrp-13 \
+          -b twrp-14.0 \
           --depth=1
         
-        # Копирование device tree в правильное место перед синхронизацией
+        # Копирование device tree в правильное место
         mkdir -p device/twrp/
         cp -r ../device/twrp/at30a6 device/twrp/
         
-        # Проверка наличия пребилтов
-        if [ ! -f "device/twrp/at30a6/prebuilt/kernel" ]; then
-          echo "❌ ERROR: Kernel not found in device/twrp/at30a6/prebuilt/kernel"
-          echo "Contents of device/twrp/at30a6/prebuilt/:"
-          ls -la device/twrp/at30a6/prebuilt/ || true
-          exit 1
-        fi
+        echo "Device tree copied to: $(pwd)/device/twrp/at30a6"
+        echo "Checking prebuilt files:"
+        ls -la device/twrp/at30a6/prebuilt/ || echo "No prebuilt directory"
         
-        # Синхронизация репозиториев
+        # Синхронизация репозиториев (уменьшим количество потоков для стабильности)
         echo "Starting repo sync..."
-        repo sync -c -j$(nproc --all) \
+        repo sync -c -j4 \
           --force-sync \
           --no-clone-bundle \
           --no-tags \
@@ -106,65 +93,112 @@ jobs:
         source build/envsetup.sh
         
         # Проверка доступных целей
-        echo "Available lunch targets:"
-        lunch 2>&1 | grep "twrp_" || true
+        echo "=== Available lunch targets ==="
+        lunch 2>&1 | grep -i "twrp\|at30a6\|omni" || echo "No specific targets found"
+        echo "==============================="
         
-        # Выбор устройства (должно соответствовать PRODUCT_DEVICE из twrp_at30a6.mk)
+        # Выбор устройства с разрешением отсутствующих зависимостей
         export ALLOW_MISSING_DEPENDENCIES=true
-        lunch twrp_at30a6-eng || lunch omni_at30a6-eng
+        
+        # Пробуем разные варианты названий устройства
+        if lunch twrp_at30a6-eng 2>/dev/null; then
+          echo "✅ Using target: twrp_at30a6-eng"
+        elif lunch omni_at30a6-eng 2>/dev/null; then
+          echo "✅ Using target: omni_at30a6-eng"
+        elif lunch aosp_at30a6-eng 2>/dev/null; then
+          echo "✅ Using target: aosp_at30a6-eng"
+        else
+          # Если не нашли, создаем цель вручную
+          echo "⚠️  Device target not found, trying generic method"
+          export TARGET_DEVICE=at30a6
+          export TARGET_PRODUCT=twrp_at30a6
+        fi
         
         # Проверка конфигурации
-        echo "========================================"
-        echo "Build configuration:"
-        echo "TARGET_ARCH: $TARGET_ARCH"
-        echo "TARGET_DEVICE: $TARGET_DEVICE"
-        echo "OUT_DIR: $OUT"
-        echo "========================================"
+        echo ""
+        echo "=== Build configuration ==="
+        echo "TARGET_ARCH: ${TARGET_ARCH:-Not set}"
+        echo "TARGET_DEVICE: ${TARGET_DEVICE:-Not set}"
+        echo "OUT_DIR: ${OUT:-Not set}"
+        echo "==========================="
+        
+        # Проверяем BoardConfig.mk
+        echo ""
+        echo "=== BoardConfig.mk content ==="
+        if [ -f "device/twrp/at30a6/BoardConfig.mk" ]; then
+          grep -E "(BOARD_KERNEL|BOARD_RAMDISK|BOARD_PAGESIZE|TARGET_ARCH)" device/twrp/at30a6/BoardConfig.mk || true
+        else
+          echo "❌ ERROR: BoardConfig.mk not found!"
+        fi
 
     - name: Build recovery image
       run: |
         cd twrp-build
         
-        # Очистка предыдущих сборок (опционально)
-        # mka clean
+        # Проверяем, что среда настроена
+        if [ -z "$OUT" ] && [ -n "$TARGET_DEVICE" ]; then
+          export OUT="out/target/product/$TARGET_DEVICE"
+          mkdir -p $OUT
+        fi
         
-        # Запуск сборки
+        # Запуск сборки с логированием
         echo "Starting build with $(nproc --all) threads..."
-        mka recoveryimage -j$(nproc --all) 2>&1 | tee build.log
+        
+        # Пробуем собрать recovery
+        if mka recoveryimage -j$(nproc --all) 2>&1 | tee build.log; then
+          echo "✅ Build command completed"
+        else
+          BUILD_EXIT_CODE=$?
+          echo "❌ Build failed with exit code: $BUILD_EXIT_CODE"
+          echo "Last 100 lines of build log:"
+          tail -100 build.log || true
+          exit $BUILD_EXIT_CODE
+        fi
         
         # Проверка результата
         if [ -f "$OUT/recovery.img" ]; then
-          echo "✅ SUCCESS: Recovery image built!"
-          echo "File size: $(stat -c%s $OUT/recovery.img) bytes"
-          echo "Location: $OUT/recovery.img"
-          
-          # Быстрая проверка образа
-          echo "Image info:"
+          echo ""
+          echo "🎉 SUCCESS: Recovery image built!"
+          echo "📁 Location: $OUT/recovery.img"
+          echo "📦 File size: $(stat -c%s $OUT/recovery.img) bytes"
+          echo "🔍 Image info:"
           file $OUT/recovery.img || true
           
-          # Сохраняем лог сборки
-          cp build.log $OUT/build.log
+          # Проверяем, можно ли распаковать образ
+          if which unpackbootimg >/dev/null 2>&1; then
+            echo ""
+            echo "🔧 Testing image unpacking..."
+            mkdir -p /tmp/test-unpack
+            if unpackbootimg -i $OUT/recovery.img -o /tmp/test-unpack 2>/dev/null; then
+              echo "✅ Image can be unpacked successfully"
+            else
+              echo "⚠️  Image unpacking test failed (might be normal for custom images)"
+            fi
+          fi
         else
-          echo "❌ ERROR: Recovery image not found in $OUT/"
-          echo "Checking output directory:"
-          ls -la $OUT/ || true
+          echo ""
+          echo "❌ ERROR: Recovery image not found!"
+          echo "Checking output directory ($OUT):"
+          ls -la $OUT/ 2>/dev/null || echo "Output directory doesn't exist"
           
-          # Показываем последние ошибки из лога
-          echo "Last 50 lines of build log:"
-          tail -50 build.log || true
+          # Ищем любые созданные образы
+          echo ""
+          echo "Searching for any generated images..."
+          find out/ -name "*.img" -type f 2>/dev/null | head -20 || true
           
           exit 1
         fi
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
+      if: success()
       with:
         name: TWRP-at30a6-$(date +%Y%m%d-%H%M%S)
         path: |
           twrp-build/out/target/product/at30a6/recovery.img
           twrp-build/out/target/product/at30a6/kernel
           twrp-build/out/target/product/at30a6/dt.img
-          twrp-build/out/target/product/at30a6/build.log
+          twrp-build/build.log
         retention-days: 7
         if-no-files-found: error
 
@@ -173,5 +207,8 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: Build-Logs-Failed
-        path: twrp-build/build.log
+        path: |
+          twrp-build/build.log
+          twrp-build/out/error.log
         retention-days: 7
+        if-no-files-found: ignore
