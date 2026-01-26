@@ -93,11 +93,9 @@ jobs:
             cp fstab.amlogic recovery.fstab
           else
             echo "Создаю минимальный recovery.fstab"
-            cat > recovery.fstab << 'EOFHERE'
-/dev/block/by-name/system     /system     ext4    ro,barrier=1    wait,slotselect
-/dev/block/by-name/userdata   /data       ext4    nosuid,nodev,noatime    wait,check,formattable
-/dev/block/by-name/cache      /cache      ext4    nosuid,nodev,noatime    wait,check
-EOFHERE
+            echo "/dev/block/by-name/system     /system     ext4    ro,barrier=1    wait,slotselect" > recovery.fstab
+            echo "/dev/block/by-name/userdata   /data       ext4    nosuid,nodev,noatime    wait,check,formattable" >> recovery.fstab
+            echo "/dev/block/by-name/cache      /cache      ext4    nosuid,nodev,noatime    wait,check" >> recovery.fstab
           fi
         fi
         
