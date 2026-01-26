@@ -10,7 +10,7 @@ on:
       MANIFEST_BRANCH:
         description: 'MANIFEST_BRANCH'
         required: true
-        default: 'twrp-12.1' 
+        default: 'twrp-12.1'
       DEVICE_TREE_URL:
         description: 'DEVICE_TREE_URL'
         required: true
@@ -46,14 +46,13 @@ jobs:
   build:
     if: github.event.repository.owner.id == github.event.sender.id
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    timeout-minutes: 90
     permissions:
       contents: write
       
     steps:
     - name: Display Run Parameters
       run: |
-        echo "::group::Build Configuration"
         echo "Manifest URL: ${{ github.event.inputs.MANIFEST_URL }}"
         echo "Manifest Branch: ${{ github.event.inputs.MANIFEST_BRANCH }}"
         echo "Device Tree URL: ${{ github.event.inputs.DEVICE_TREE_URL }}"
@@ -62,215 +61,62 @@ jobs:
         echo "Device Name: ${{ github.event.inputs.DEVICE_NAME }}"
         echo "Makefile Name: ${{ github.event.inputs.MAKEFILE_NAME }}"
         echo "Build Target: ${{ github.event.inputs.BUILD_TARGET }}.img"
-        echo "::endgroup::"
 
-    - name: Check Out This Repository
-      uses: actions/checkout@v4
-      with:
-        path: local_tree
-
-    - name: Prepare Environment
+    - name: Cleanup workspace
       run: |
-        sudo apt update -y
-        sudo apt install -y \
-          git-core gnupg flex bison build-essential zip \
-          curl zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 \
-          lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
-          libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig \
-          python2 python3 bc ccache liblz4-tool libncurses5 \
-          libssl-dev libsdl1.2-dev libwxgtk3.0-gtk3-dev lzop \
-          pngcrush schedtool squashfs-tools tree rsync
-        # Очистка кэша после установки
-        sudo apt clean
-        sudo rm -rf /var/lib/apt/lists/*
+        sudo rm -rf /home/runner/work/_temp/* || true
+        df -h
 
-    - name: Install OpenJDK 17 (for Android 13)
+    - name: Prepare environment
+      run: |
+        sudo apt update
+        sudo apt install -y gperf gcc-multilib g++-multilib libc6-dev lib32ncurses5-dev \
+          x11proto-core-dev libx11-dev lib32z-dev libgl1-mesa-dev libxml2-utils xsltproc \
+          bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev \
+          libwxgtk3.0-gtk3-dev lzop pngcrush schedtool squashfs-tools python3 \
+          git-core gnupg flex bison build-essential zip curl zlib1g-dev
+        sudo apt clean
+
+    - name: Install OpenJDK 17
       uses: actions/setup-java@v3
       with:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Setup SSH Keys (if needed)
+    - name: Setup SSH Keys
       if: ${{ startsWith(github.event.inputs.MANIFEST_URL, 'git@github.com') }}
       uses: webfactory/ssh-agent@v0.5.4
       with:
         ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-    - name: Install repo tool
+    - name: Install repo
       run: |
-        sudo apt install -y repo
-        repo --version
-
-    - name: Check Disk Space Before Start
-      run: |
-        echo "=== Initial Disk Space ==="
-        df -h
-        echo "=== Home directory size ==="
-        du -sh ~/ || true
+        mkdir -p ~/bin
+        curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        sudo cp ~/bin/repo /usr/bin/repo
 
     - name: Initialize repo workspace
       run: |
         mkdir -p workspace
         cd workspace
-        echo "workspace=$(pwd)" >> $GITHUB_ENV
-        
-        # Настройка git для избежания проблем
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
         git config --global color.ui false
-        git config --global http.postBuffer 1048576000
-        
-        # Минимальная конфигурация для экономии места
-        repo init --depth=1 -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }} --repo-url=https://gerrit.googlesource.com/git-repo --groups=default,-darwin,-notdefault,-mips
+        repo init --depth=1 -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }}
 
-    - name: Update repo tool to latest version
-      run: |
-        # Обновляем repo до последней версии
-        curl -s https://storage.googleapis.com/git-repo-downloads/repo > /tmp/repo
-        chmod a+x /tmp/repo
-        sudo mv /tmp/repo /usr/bin/repo
-        repo --version
-
-    - name: Repo Sync with minimal footprint
-      id: repo_sync
-      continue-on-error: false
-      timeout-minutes: 30
+    - name: Repo Sync
       run: |
         cd workspace
-        
-        # Агрессивная экономия места
-        SYNC_OPTIONS="-c -j2 --depth=1 --no-tags --no-clone-bundle --force-sync --optimized-fetch --current-branch"
-        
-        echo "Starting repo sync with options: $SYNC_OPTIONS"
-        echo "WARNING: Using minimal depth=1 to save disk space!"
-        
-        # Пробуем синхронизацию с таймаутами
-        for i in {1..3}; do
-          echo "Attempt $i/3..."
-          
-          # Запускаем sync с таймаутом (20 минут)
-          timeout 1200 repo sync $SYNC_OPTIONS
-          
-          SYNC_EXIT_CODE=$?
-          
-          if [ $SYNC_EXIT_CODE -eq 0 ]; then
-            echo "✅ Repo sync completed successfully on attempt $i"
-            echo "sync_success=true" >> $GITHUB_OUTPUT
-            break
-          elif [ $SYNC_EXIT_CODE -eq 124 ]; then
-            echo "⚠️ Repo sync timed out on attempt $i"
-            if [ $i -lt 3 ]; then
-              echo "Waiting 10 seconds before retry..."
-              sleep 10
-            fi
-          else
-            echo "❌ Repo sync failed with exit code: $SYNC_EXIT_CODE"
-            
-            if [ $i -eq 3 ]; then
-              exit $SYNC_EXIT_CODE
-            fi
-            
-            echo "Waiting 10 seconds before retry..."
-            sleep 10
-          fi
-        done
-        
-        if [ ! -f .repo/manifest.xml ]; then
-          echo "❌ Repo initialization failed - manifest.xml not found"
-          exit 1
-        fi
-        
-        echo "Disk usage after repo sync:"
-        du -sh . 2>/dev/null || echo "Cannot check disk usage"
+        repo sync -j2 --force-sync --no-tags --no-clone-bundle --optimized-fetch
 
-    - name: Clean up unnecessary files
-      if: steps.repo_sync.outputs.sync_success == 'true'
+    - name: Copy device tree from current repo
       run: |
-        cd workspace
-        echo "Cleaning up unnecessary files to save disk space..."
-        
-        # Директории, которые можно удалить для TWRP сборки
-        # (сохраняем только самое необходимое)
-        UNNECESSARY_DIRS=(
-          "art"
-          "cts"
-          "developers"
-          "development"
-          "docs"
-          "external"
-          "hardware"
-          "libcore"
-          "libnativehelper"
-          "ndk"
-          "pdk"
-          "platform_testing"
-          "prebuilts"
-          "sdk"
-          "toolchain"
-          "tools"
-          "test"
-          "trusty"
-          "vendor/google"
-        )
-        
-        for dir in "${UNNECESSARY_DIRS[@]}"; do
-          if [ -d "$dir" ]; then
-            echo "Removing $dir/ to save space..."
-            rm -rf "$dir" 2>/dev/null || true
-          fi
-        done
-        
-        # Очистка .git объектов
-        echo "Cleaning .git objects..."
-        find . -name ".git" -type d -exec rm -rf {} + 2>/dev/null || true
-        
-        echo "Disk usage after cleanup:"
-        du -sh . 2>/dev/null || echo "Cannot check disk usage"
-
-    - name: Verify repo workspace
-      if: steps.repo_sync.outputs.sync_success == 'true'
-      run: |
-        cd workspace
-        echo "=== Repo Workspace Verification ==="
-        
-        echo "1. Checking essential files..."
-        if [ -f .repo/manifest.xml ]; then
-          echo "   ✅ .repo/manifest.xml exists"
-        else
-          echo "   ❌ .repo/manifest.xml missing!"
-          exit 1
-        fi
-        
-        echo "2. Checking critical Android directories..."
-        CRITICAL_DIRS=("build" "bootable" "device" "frameworks" "system")
-        
-        for dir in "${CRITICAL_DIRS[@]}"; do
-          if [ -d "$dir" ]; then
-            echo "   ✅ $dir/ exists"
-          else
-            echo "   ⚠️  $dir/ missing (might be OK for TWRP)"
-          fi
-        done
-        
-        echo "3. Total workspace size:"
-        du -sh . 2>/dev/null || true
-
-    - name: Copy Local Device Tree
-      run: |
-        # Используем локальные файлы вместо клонирования
+        # Копируем локальный device tree вместо клонирования
         mkdir -p workspace/${{ github.event.inputs.DEVICE_PATH }}
-        cp -r local_tree/* workspace/${{ github.event.inputs.DEVICE_PATH }}/
-        
-        # Автоматически фиксим Android версию в BoardConfig.mk
-        cd workspace/${{ github.event.inputs.DEVICE_PATH }}
-        if [ -f BoardConfig.mk ]; then
-          echo "Fixing Android version in BoardConfig.mk..."
-          sed -i 's/^PLATFORM_VERSION := .*/PLATFORM_VERSION := 13/' BoardConfig.mk
-          sed -i 's/^PLATFORM_SECURITY_PATCH := .*/PLATFORM_SECURITY_PATCH := 2025-01-01/' BoardConfig.mk
-          echo "Fixed BoardConfig.mk for Android 13"
-        fi
+        cp -r ${{ github.workspace }}/* workspace/${{ github.event.inputs.DEVICE_PATH }}/
 
-    - name: Clone Common Tree (if specified)
+    - name: Clone common tree (if specified)
       if: |
         github.event.inputs.COMMON_TREE_URL != null 
         && github.event.inputs.COMMON_TREE_URL != ''
@@ -278,30 +124,14 @@ jobs:
         && github.event.inputs.COMMON_PATH != ''
       run: |
         cd workspace
-        git clone --depth=1 ${{ github.event.inputs.COMMON_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.COMMON_PATH }}
-
-    - name: Check Build Tree Type
-      id: buildtree
-      run: |
-        if [[ "${{ github.event.inputs.MANIFEST_BRANCH }}" == *"twrp-11"* ]] || [[ "${{ github.event.inputs.MANIFEST_BRANCH }}" == *"twrp-12"* ]]; then
-          echo "tree_type=twrp" >> $GITHUB_OUTPUT
-        else
-          echo "tree_type=omni" >> $GITHUB_OUTPUT
-        fi
+        git clone ${{ github.event.inputs.COMMON_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.COMMON_PATH }}
 
     - name: Set Swap Space
       uses: pierotofy/set-swap-space@master
       with:
-        swap-size-gb: 2  # Уменьшили с 8 до 2GB
+        swap-size-gb: 4
 
-    - name: Check Disk Space Before Build
-      run: |
-        echo "=== Disk Space Before Build ==="
-        df -h
-        echo "=== Workspace size ==="
-        du -sh workspace/ 2>/dev/null || true
-
-    - name: Build Recovery
+    - name: Build recovery
       run: |
         cd workspace
         export ALLOW_MISSING_DEPENDENCIES=true
@@ -309,70 +139,34 @@ jobs:
         
         source build/envsetup.sh
         
-        # Пробуем lunch с userdebug (стандарт для TWRP)
+        # Пробуем сначала userdebug, потом eng
         if lunch ${{ github.event.inputs.MAKEFILE_NAME }}-userdebug; then
-          echo "Using userdebug variant"
+          echo "Building userdebug variant"
         else
-          # Fallback на eng если userdebug не найден
           lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng
         fi
         
-        # Очистка и сборка
         make clean
-        mka ${{ github.event.inputs.BUILD_TARGET }}image -j2 2>&1 | tee build.log  # Уменьшили с $(nproc) до 2
+        make ${{ github.event.inputs.BUILD_TARGET }}image -j2
 
-    - name: Verify Build Output
-      run: |
-        cd workspace
-        OUTPUT_FILE="out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img"
-        
-        if [ -f "$OUTPUT_FILE" ]; then
-          echo "✅ SUCCESS: Recovery image created!"
-          ls -lh "$OUTPUT_FILE"
-          echo "Size: $(stat -c%s "$OUTPUT_FILE") bytes"
-          
-          # Копируем для удобной загрузки
-          cp "$OUTPUT_FILE" recovery.img
-        else
-          echo "❌ FAILED: Recovery image not found"
-          echo "Searching in out/target/product/${{ github.event.inputs.DEVICE_NAME }}:"
-          ls -la "out/target/product/${{ github.event.inputs.DEVICE_NAME }}/" || true
-          exit 1
-        fi
-
-    - name: Upload to Artifacts
+    - name: Upload recovery image
       uses: actions/upload-artifact@v4
+      if: success()
       with:
-        name: TWRP-${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_number }}
-        path: |
-          workspace/recovery.img
-          workspace/build.log
-        retention-days: 30
+        name: recovery-${{ github.event.inputs.DEVICE_NAME }}
+        path: workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img
 
-    - name: Create GitHub Release
+    - name: Create Release
       uses: softprops/action-gh-release@v1
       if: success()
       with:
         files: workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img
-        name: "TWRP ${{ github.event.inputs.DEVICE_NAME }} - Build #${{ github.run_number }}"
+        name: "TWRP ${{ github.event.inputs.DEVICE_NAME }}"
         tag_name: "build-${{ github.run_number }}"
         body: |
-          ### SaluteTV at30a6 TWRP Recovery
+          TWRP Recovery for ${{ github.event.inputs.DEVICE_NAME }}
           
-          **Build Information:**
-          - Device: ${{ github.event.inputs.DEVICE_NAME }}
-          - Android Version: 13 (TWRP ${{ github.event.inputs.MANIFEST_BRANCH }})
-          - Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          - Build ID: ${{ github.run_id }}
-          
-          **Build Parameters:**
-          - Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}
-          - Device Tree: ${{ github.event.inputs.DEVICE_TREE_URL }}
-          - Target: ${{ github.event.inputs.BUILD_TARGET }}.img
-          
-          **Installation:**
-          1. Boot to fastboot mode
-          2. `fastboot flash recovery recovery.img`
-          3. `fastboot reboot recovery`
+          Built on: $(date)
+          Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
