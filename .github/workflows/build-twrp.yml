@@ -1,15 +1,14 @@
-
-name: TWRP Quick Build
+name: TWRP Build for at30a6
 on: workflow_dispatch
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 90  # Уменьшили таймаут
+    timeout-minutes: 120
     
     steps:
     - uses: actions/checkout@v4
     
-    - name: Setup minimal environment
+    - name: Setup build environment
       run: |
         sudo apt-get update
         sudo apt-get install -y \
@@ -17,130 +16,156 @@ jobs:
           zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 \
           lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
           libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig \
-          python3 openjdk-11-jdk bc coreutils
+          python3 openjdk-11-jdk bc coreutils cpio gzip \
+          android-sdk-libsparse-utils libssl-dev
         
         # Устанавливаем repo
         mkdir -p ~/bin
-        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+rx ~/bin/repo
         echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
         source ~/.bashrc
     
-    - name: Build TWRP (fast)
+    - name: Build TWRP
       run: |
-        echo "=== Начало быстрой сборки ==="
+        echo "=== Начало сборки TWRP для at30a6 ==="
         
-        # Создаем директорию и копируем файлы
-        mkdir -p twrp_build/device/salute/at30a6
-        cd twrp_build
+        # 1. Подготовка директории
+        mkdir -p twrp/device/salute/at30a6
+        cd twrp
         
-        # Копируем ВСЕ файлы из репозитория
-        cp -r ../device/salute/at30a6/* device/salute/at30a6/ 2>/dev/null || true
+        # 2. Копирование device tree
+        echo "Копируем device tree..."
         cp -r ../prebuilt device/salute/at30a6/ 2>/dev/null || true
         cp ../*.mk device/salute/at30a6/ 2>/dev/null || true
+        cp ../recovery.fstab device/salute/at30a6/ 2>/dev/null || true
+        cp ../mkbootimg.mk device/salute/at30a6/ 2>/dev/null || true
         
-        # Минимальная инициализация
+        # 3. Проверяем файлы
+        echo "Проверяем файлы:"
+        ls -la device/salute/at30a6/
+        
+        # 4. Инициализация репозитория
+        echo "Инициализация репозитория TWRP..."
         repo init \
           -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
           -b twrp-11 \
-          --depth=1 \
-          --no-repo-verify
+          --depth=1
         
-        # Только необходимые репозитории
-        echo "=== Синхронизация только device tree ==="
+        # 5. Создаем local manifest для нашего устройства
         mkdir -p .repo/local_manifests
         cat > .repo/local_manifests/local.xml << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
-  <!-- Только device tree и зависимости -->
-  <project path="device/salute/at30a6" name="SKOCHE/SaluteTV_at30a6_TWRP" remote="origin" revision="main"/>
+  <project path="device/salute/at30a6" 
+           name="SKOCHE/SaluteTV_at30a6_TWRP" 
+           remote="github" 
+           revision="main" />
 </manifest>
 EOF
         
-        # Синхронизируем только минимум
-        repo sync -c -j2 --no-tags --no-clone-bundle --force-sync \
+        # Добавляем remote
+        git config --global url."https://github.com/".insteadOf git://github.com/
+        
+        # 6. Синхронизация только необходимого
+        echo "Синхронизация репозиториев..."
+        repo sync -c -j2 --no-tags --no-clone-bundle \
           device/salute/at30a6 \
           bootable/recovery \
           system/core \
           system/extras \
-          2>&1 | tail -50
+          external/libpng \
+          external/zlib \
+          external/freetype \
+          2>&1 | tail -100
         
-        echo "=== Настройка сборки ==="
+        # 7. Проверяем, что device tree скопировался
+        if [ ! -f "device/salute/at30a6/BoardConfig.mk" ]; then
+          echo "Копируем device tree вручную..."
+          cp -r ../device/salute/at30a6/* device/salute/at30a6/ 2>/dev/null || true
+        fi
+        
+        # 8. Настройка сборки
+        echo "Настройка сборки..."
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
         export USE_CCACHE=1
-        ccache -M 5G
+        ccache -M 10G
         
         source build/envsetup.sh
-        lunch twrp_at30a6-eng
         
-        echo "=== Сборка ТОЛЬКО recovery ==="
-        # Только необходимые цели
-        make -j2 recoveryimage 2>&1 | tee build.log | tail -100
-        
-        # Если сборка падает, пытаемся собрать только ramdisk
-        if [ $? -ne 0 ]; then
-          echo "=== Пробуем альтернативный способ ==="
-          make -j2 recoveryramdisk 2>&1 | tail -50
-          
-          # Ручное создание recovery.img
-          echo "=== Ручное создание recovery.img ==="
-          if [ -f "out/target/product/at30a6/ramdisk-recovery.cpio.gz" ]; then
-            mkbootimg \
-              --kernel device/salute/at30a6/prebuilt/kernel \
-              --ramdisk out/target/product/at30a6/ramdisk-recovery.cpio.gz \
-              --dt device/salute/at30a6/prebuilt/dt.img \
-              --cmdline "androidboot.selinux=permissive" \
-              --base 0x00000000 \
-              --pagesize 2048 \
-              --kernel_offset 0x00008000 \
-              --ramdisk_offset 0x01000000 \
-              --tags_offset 0x00000100 \
-              --header_version 2 \
-              --output ../../recovery-raw.img
-            
-            # Заполняем до 32MB
-            truncate -s 33554432 ../../recovery-raw.img
-            mv ../../recovery-raw.img ../../recovery.img
-            echo "✅ recovery.img создан вручную"
-          fi
+        # 9. Пытаемся запустить lunch
+        echo "Запуск lunch..."
+        if lunch twrp_at30a6-eng 2>/dev/null; then
+          echo "lunch успешен"
+        else
+          # Если lunch не работает, устанавливаем переменные вручную
+          echo "Ручная настройка..."
+          export TARGET_PRODUCT=twrp_at30a6
+          export TARGET_BUILD_VARIANT=eng
+          export TARGET_BUILD_TYPE=release
         fi
         
-        echo "=== Поиск результата ==="
-        cd ..
+        # 10. Сборка recovery
+        echo "=== СБОРКА RECOVERY ==="
+        make -j2 recoveryimage 2>&1 | tee build.log
         
-        # Проверяем разные пути
+        # 11. Проверка результата
+        echo "=== ПРОВЕРКА РЕЗУЛЬТАТА ==="
+        
+        # Ищем recovery.img
+        RECOVERY_IMG=""
         for path in \
-          "twrp_build/out/target/product/at30a6/recovery.img" \
-          "recovery.img" \
-          "twrp_build/out/target/product/*/recovery.img"; do
+          "out/target/product/at30a6/recovery.img" \
+          "out/target/product/*/recovery.img" \
+          "$(find . -name "recovery.img" -type f 2>/dev/null | grep -v testdata | head -1)"; do
           
-          if ls $path 1>/dev/null 2>&1; then
-            echo "✅ Найден: $path"
-            cp $(ls $path | head -1) recovery-final.img
+          if [ -f "$path" ]; then
+            RECOVERY_IMG="$path"
+            echo "✅ Найден recovery.img: $path"
             break
           fi
         done
         
-        if [ -f "recovery-final.img" ]; then
-          echo "🎉 УСПЕХ! Размер: $(stat -c%s recovery-final.img) байт"
-          # Проверяем и корректируем размер
-          SIZE=$(stat -c%s recovery-final.img)
+        if [ -n "$RECOVERY_IMG" ]; then
+          # Копируем на уровень выше
+          cp "$RECOVERY_IMG" ../recovery.img
+          SIZE=$(stat -c%s ../recovery.img 2>/dev/null || echo 0)
+          echo "Размер recovery.img: $SIZE байт"
+          
+          # Если размер меньше 30MB, заполняем до 32MB
           if [ $SIZE -lt 30000000 ]; then
-            echo "⚠️ Размер слишком мал ($SIZE), заполняем до 32MB..."
-            truncate -s 33554432 recovery-final.img
+            echo "Заполняем до 32MB..."
+            truncate -s 33554432 ../recovery.img
+            echo "Новый размер: $(stat -c%s ../recovery.img) байт"
+          fi
+          
+          # Проверяем конечный размер
+          FINAL_SIZE=$(stat -c%s ../recovery.img 2>/dev/null || echo 0)
+          echo "=== ИТОГ ==="
+          echo "Файл: ../recovery.img"
+          echo "Размер: $FINAL_SIZE байт"
+          echo "Ожидалось: 33554432 байт (32MB)"
+          
+          if [ $FINAL_SIZE -eq 33554432 ]; then
+            echo "🎉 УСПЕХ! Правильный размер!"
+          else
+            echo "⚠️ Размер отличается, но файл создан"
           fi
         else
-          echo "❌ recovery.img не найден"
+          echo "❌ recovery.img не найден после сборки"
+          echo "Содержимое out/target/product/at30a6/:"
+          ls -la out/target/product/at30a6/ 2>/dev/null || echo "Директория не существует"
           exit 1
         fi
+        
+        cd ..
     
-    - name: Upload TWRP
+    - name: Upload TWRP Recovery
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP-Recovery
-        path: recovery-final.img
-        if-no-files-found: error
+        name: TWRP-at30a6
+        path: recovery.img
         retention-days: 30
     
     - name: Upload build log
@@ -148,5 +173,5 @@ EOF
       uses: actions/upload-artifact@v4
       with:
         name: Build-Log
-        path: twrp_build/build.log
+        path: twrp/build.log
         retention-days: 7
