@@ -1,122 +1,141 @@
 name: Build TWRP Recovery
-on: workflow_dispatch
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch: # Ручной запуск
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 180 # 3 часа максимум
     
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install tools
+    - name: Checkout device tree
+      uses: actions/checkout@v4
+      with:
+        path: device/twrp/at30a6
+        fetch-depth: 0
+
+    - name: Setup environment
       run: |
-        sudo apt update
-        sudo apt install -y cpio gzip python3 bc
-    
-    - name: Create TWRP files
+        # Установка зависимостей
+        sudo apt-get update
+        sudo apt-get install -y \
+          git-core gnupg flex bison build-essential zip curl zlib1g-dev \
+          gcc-multilib g++-multilib libc6-dev-i386 lib32ncurses5-dev \
+          x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev \
+          libxml2-utils xsltproc unzip fontconfig python3 python-is-python3 \
+          openjdk-11-jdk bc lz4 mkbootimg unmkbootimg abootimg \
+          libssl-dev rsync schedtool squashfs-tools imagemagick ccache
+        
+        # Настройка ccache для ускорения
+        echo "CCACHE_DIR=/tmp/ccache" >> $GITHUB_ENV
+        echo "USE_CCACHE=1" >> $GITHUB_ENV
+        echo "CCACHE_EXEC=$(which ccache)" >> $GITHUB_ENV
+        echo "CCACHE_SIZE=20G" >> $GITHUB_ENV
+        ccache -M 20G
+        
+        # Создание симлинка python -> python3
+        sudo ln -sf /usr/bin/python3 /usr/bin/python
+
+    - name: Initialize TWRP source
       run: |
-        echo "Creating TWRP files..."
-        rm -rf recovery/root
-        mkdir -p recovery/root
+        # Скачивание TWRP манифеста
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
+          -b twrp-13 \
+          --depth=1
         
-        # init.rc
-        echo "on early-init" > recovery/root/init.rc
-        echo "    start ueventd" >> recovery/root/init.rc
-        echo "" >> recovery/root/init.rc
-        echo "on init" >> recovery/root/init.rc
-        echo "    mkdir /dev" >> recovery/root/init.rc
-        echo "    mkdir /proc" >> recovery/root/init.rc
-        echo "    mkdir /sys" >> recovery/root/init.rc
-        echo "    mkdir /tmp" >> recovery/root/init.rc
-        echo "    mount tmpfs tmpfs /tmp" >> recovery/root/init.rc
-        echo "    chmod 0777 /tmp" >> recovery/root/init.rc
-        echo "" >> recovery/root/init.rc
-        echo "service ueventd /sbin/ueventd" >> recovery/root/init.rc
-        echo "    class core" >> recovery/root/init.rc
-        echo "    critical" >> recovery/root/init.rc
-        echo "" >> recovery/root/init.rc
-        echo "service recovery /sbin/recovery" >> recovery/root/init.rc
-        echo "    class main" >> recovery/root/init.rc
-        echo "    disabled" >> recovery/root/init.rc
-        echo "    oneshot" >> recovery/root/init.rc
+        # Синхронизация репозиториев (только необходимое)
+        repo sync -c -j$(nproc --all) \
+          --force-sync \
+          --no-clone-bundle \
+          --no-tags \
+          --optimized-fetch \
+          --prune
         
-        # default.prop
-        echo "ro.secure=0" > recovery/root/default.prop
-        echo "ro.debuggable=1" >> recovery/root/default.prop
-        echo "ro.adb.secure=0" >> recovery/root/default.prop
-        echo "ro.build.product=at30a6" >> recovery/root/default.prop
-        echo "ro.product.device=at30a6" >> recovery/root/default.prop
+        # Копирование device tree на правильное место
+        mkdir -p device/twrp/
+        cp -r device/twrp/at30a6 device/twrp/at30a6/
         
-        # Создаем структуру
-        mkdir -p recovery/root/sbin
-        mkdir -p recovery/root/etc
+        # Убедимся, что пребилты на месте
+        if [ -f "device/twrp/at30a6/prebuilt/kernel" ]; then
+          echo "Kernel found, size: $(stat -c%s device/twrp/at30a6/prebuilt/kernel) bytes"
+        else
+          echo "ERROR: Kernel not found!"
+          exit 1
+        fi
         
-        # recovery binary
-        echo "#!/bin/sh" > recovery/root/sbin/recovery
-        echo 'echo "TWRP Recovery"' >> recovery/root/sbin/recovery
-        chmod 755 recovery/root/sbin/recovery
-        
-        # ueventd binary
-        echo "#!/bin/sh" > recovery/root/sbin/ueventd
-        echo 'echo "ueventd"' >> recovery/root/sbin/ueventd
-        chmod 755 recovery/root/sbin/ueventd
-        
-        echo "Files created"
-    
-    - name: Build ramdisk
+        if [ -f "device/twrp/at30a6/prebuilt/dt.img" ]; then
+          echo "DTB found, size: $(stat -c%s device/twrp/at30a6/prebuilt/dt.img) bytes"
+        else
+          echo "WARNING: DTB not found!"
+        fi
+
+    - name: Setup build environment
       run: |
-        echo "Building ramdisk..."
-        cd recovery/root
-        find . | cpio -o -H newc 2>/dev/null | gzip -9 > ../../ramdisk.cpio.gz
-        cd ../../
-        echo "Ramdisk created"
-    
+        # Установка переменных окружения
+        source build/envsetup.sh
+        
+        # Выбор устройства
+        lunch twrp_at30a6-eng
+        
+        # Проверка конфигурации
+        echo "========================================"
+        echo "Build configuration:"
+        echo "TARGET_ARCH: $TARGET_ARCH"
+        echo "TARGET_DEVICE: $TARGET_DEVICE"
+        echo "OUT_DIR: $OUT"
+        echo "========================================"
+        
+        # Проверка BoardConfig.mk
+        echo "Checking BoardConfig.mk values:"
+        grep -E "(BOARD_KERNEL|BOARD_RAMDISK|BOARD_PAGESIZE)" device/twrp/at30a6/BoardConfig.mk || true
+
     - name: Build recovery image
       run: |
-        echo "Building recovery.img..."
+        # Запуск сборки (только recovery)
+        mka recoveryimage -j$(nproc --all)
         
-        # Простой способ создать boot.img
-        # 1. Создаем заголовок (Android boot image header)
-        echo -n "ANDROID!" > header.bin
-        printf "\\x00\\x00\\x00\\x00" >> header.bin  # kernel size (заполним позже)
-        printf "\\x00\\x00\\x00\\x00" >> header.bin  # kernel addr
-        printf "\\x00\\x00\\x00\\x00" >> header.bin  # ramdisk size
-        printf "\\x00\\x00\\x08\\x01" >> header.bin  # ramdisk addr (0x01000000)
-        printf "\\x00\\x00\\x00\\x00" >> header.bin  # second size
-        printf "\\x00\\x00\\xf0\\x00" >> header.bin  # second addr (0x00f00000)
-        printf "\\x00\\x00\\x00\\x01" >> header.bin  # tags addr (0x00000100)
-        printf "\\x00\\x00\\x00\\x00" >> header.bin  # page size (заполним)
-        printf "\\x00\\x00\\x00\\x00" >> header.bin  # unused
-        printf "\\x00\\x00\\x00\\x00" >> header.bin  # os version
-        printf "\\x00\\x00\\x00\\x00" >> header.bin  # name
-        printf "\\x00\\x00\\x00\\x00" >> header.bin  # cmdline
-        printf "\\x00\\x00\\x00\\x00" >> header.bin  # id
-        
-        # 2. Собираем компоненты
-        KERNEL_SIZE=$(stat -c%s prebuilt/kernel 2>/dev/null || echo 0)
-        RAMDISK_SIZE=$(stat -c%s ramdisk.cpio.gz 2>/dev/null || echo 0)
-        DTB_SIZE=$(stat -c%s prebuilt/dt.img 2>/dev/null || echo 0)
-        
-        echo "Kernel: $KERNEL_SIZE bytes"
-        echo "Ramdisk: $RAMDISK_SIZE bytes"
-        echo "DTB: $DTB_SIZE bytes"
-        
-        # 3. Создаем recovery.img
-        cat header.bin > recovery.img
-        cat prebuilt/kernel >> recovery.img
-        cat ramdisk.cpio.gz >> recovery.img
-        cat prebuilt/dt.img >> recovery.img
-        
-        # 4. Заполняем до 32MB
-        truncate -s 33554432 recovery.img
-        
-        echo "Final size: $(stat -c%s recovery.img) bytes"
-        
-        # Очистка
-        rm -f header.bin ramdisk.cpio.gz 2>/dev/null || true
-    
-    - name: Upload artifact
+        # Проверка результата
+        if [ -f "$OUT/recovery.img" ]; then
+          echo "✅ SUCCESS: Recovery image built!"
+          echo "File size: $(stat -c%s $OUT/recovery.img) bytes"
+          echo "Location: $OUT/recovery.img"
+          
+          # Проверка образа
+          echo "Checking image structure:"
+          file $OUT/recovery.img || true
+          
+          # Попытка распаковать для проверки
+          if command -v unpackbootimg &> /dev/null; then
+            mkdir -p /tmp/test-unpack
+            cd /tmp/test-unpack
+            unpackbootimg -i $OUT/recovery.img -o test 2>/dev/null && echo "✅ Image can be unpacked" || echo "⚠️  Image unpacking failed"
+          fi
+        else
+          echo "❌ ERROR: Recovery image not found!"
+          ls -la $OUT/
+          exit 1
+        fi
+
+    - name: Upload recovery image
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP
-        path: recovery.img
+        name: TWRP-recovery-at30a6
+        path: |
+          ${{ github.workspace }}/out/target/product/at30a6/recovery.img
+          ${{ github.workspace }}/out/target/product/at30a6/kernel
+          ${{ github.workspace }}/out/target/product/at30a6/dt.img
+        retention-days: 7
+        if-no-files-found: error
+
+    - name: Create release (optional)
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ${{ github.workspace }}/out/target/product/at30a6/recovery.img
+        draft: false
+        prerelease: false
