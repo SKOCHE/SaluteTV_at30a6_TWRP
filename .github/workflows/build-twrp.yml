@@ -1,332 +1,53 @@
-name: Build TWRP Recovery
+name: Build TWRP
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [ main ]
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    timeout-minutes: 90
 
     steps:
-    - name: Checkout repository
+    - name: Checkout Device Tree
       uses: actions/checkout@v4
+      with:
+        path: device_tree
 
-    - name: Install necessary tools
+    - name: Setup Build Environment
       run: |
-        sudo apt-get update -q
-        sudo apt-get install -y \
-          cpio \
-          gzip \
-          python3 \
-          xxd \
-          wget \
-          make \
-          gcc
+        # 1. Клонируем минимальный манифест TWRP
+        git clone https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git twrp_build -b twrp-12.1 --depth=1
+        cd twrp_build
         
-        echo "Tools installed successfully"
+        # 2. Создаем правильный путь для устройства
+        mkdir -p device/salute
+        cp -r ../device_tree device/salute/at30a6
+        
+        # 3. Инициализируем и синхронизируем (это может занять время)
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --depth=1
+        repo sync -c -j$(nproc) --no-tags --no-clone-bundle
 
-    - name: Build and install mkbootimg from source
+    - name: Build Recovery
       run: |
-        echo "=== Building mkbootimg from source ==="
+        cd twrp_build
+        # Критически важные переменные окружения
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export LC_ALL=C
         
-        # Создаем рабочую директорию
-        mkdir -p /tmp/mkbootimg_build
-        cd /tmp/mkbootimg_build
+        source build/envsetup.sh
+        lunch twrp_at30a6-userdebug
         
-        # Скачиваем исходники mkbootimg
-        wget -q https://raw.githubusercontent.com/osm0sis/mkbootimg/master/mkbootimg.c
-        wget -q https://raw.githubusercontent.com/osm0sis/mkbootimg/master/mkbootimg.h
-        
-        # Компилируем mkbootimg
-        echo "Compiling mkbootimg..."
-        gcc -o mkbootimg mkbootimg.c -I. -Wno-implicit-function-declaration
-        chmod +x mkbootimg
-        
-        # Скачиваем и компилируем unpackbootimg
-        wget -q https://raw.githubusercontent.com/osm0sis/mkbootimg/master/unpackbootimg.c
-        gcc -o unpackbootimg unpackbootimg.c -Wno-implicit-function-declaration
-        chmod +x unpackbootimg
-        
-        # Копируем в system
-        sudo cp mkbootimg unpackbootimg /usr/local/bin/
-        
-        echo "✅ mkbootimg tools compiled and installed"
+        # Собираем только recovery
+        mka recoveryimage
 
-    - name: Build recovery image with 32MB padding
-      run: |
-        echo "=== Step 1: Verify prebuilt files ==="
-        ls -lh prebuilt/
-        
-        echo "=== Step 2: Create proper ramdisk ==="
-        # Создаем правильный ramdisk для recovery
-        mkdir -p rd
-        cd rd
-        
-        # Минимальная структура для Android recovery
-        mkdir -p sbin
-        mkdir -p system/bin
-        mkdir -p tmp
-        mkdir -p dev
-        mkdir -p proc
-        mkdir -p sys
-        
-        # Простой init
-        cat > init << 'EOF'
-#!/system/bin/sh
-export PATH=/sbin:/system/bin:/system/xbin
-
-# Mount basic filesystems
-mount -t proc proc /proc
-mount -t sysfs sysfs /sys
-mount -t tmpfs tmpfs /tmp
-
-echo "========================================"
-echo "  SaluteTV at30a6 TWRP Recovery"
-echo "========================================"
-echo ""
-
-# Если есть скрипт recovery, запускаем его
-if [ -x /sbin/recovery ]; then
-    exec /sbin/recovery
-else
-    # Иначе запускаем shell
-    exec /system/bin/sh
-fi
-EOF
-        chmod 755 init
-        
-        # Простой recovery бинарник
-        cat > sbin/recovery << 'EOF'
-#!/system/bin/sh
-echo "TWRP Recovery started"
-echo "Device: at30a6"
-echo "Kernel: $(uname -r)"
-echo ""
-echo "Available commands:"
-echo "  reboot - reboot device"
-echo "  exit   - exit to shell"
-echo ""
-echo "Press Ctrl+C to reboot or type 'exit'"
-exec /system/bin/sh
-EOF
-        chmod 755 sbin/recovery
-        
-        # Упаковка ramdisk
-        echo "Creating ramdisk..."
-        find . | cpio -o -H newc 2>/dev/null | gzip -9 > ../ramdisk.gz
-        cd ..
-        
-        RAMDISK_SIZE=$(stat -c%s ramdisk.gz)
-        echo "Ramdisk size: ${RAMDISK_SIZE} bytes"
-        
-        echo "=== Step 3: Build recovery.img with CORRECT parameters ==="
-        # Используем ПРАВИЛЬНЫЕ параметры из Android Image Kitchen
-        echo "Building image with mkbootimg..."
-        mkbootimg \
-          --kernel prebuilt/kernel \
-          --ramdisk ramdisk.gz \
-          --dt prebuilt/dt.img \
-          --base 0x10000000 \
-          --kernel_offset 0x00008000 \
-          --ramdisk_offset 0x01000000 \
-          --second_offset 0x00f00000 \
-          --tags_offset 0x00000100 \
-          --pagesize 2048 \
-          --header_version 0 \
-          --cmdline "30a6" \
-          --board "at30a6" \
-          --hash sha1 \
-          -o recovery.img.tmp
-        
-        echo "=== Step 4: Pad to 32MB ==="
-        # Выравниваем образ до 32MB (33554432 байт)
-        CURRENT_SIZE=$(stat -c%s recovery.img.tmp)
-        TARGET_SIZE=33554432
-        
-        echo "Current size: ${CURRENT_SIZE} bytes"
-        echo "Target size:  ${TARGET_SIZE} bytes"
-        
-        if [ ${CURRENT_SIZE} -lt ${TARGET_SIZE} ]; then
-            echo "Padding image to 32MB..."
-            # Создаем файл нужного размера
-            dd if=recovery.img.tmp of=recovery.img bs=1M count=32 conv=sync,notrunc 2>/dev/null || \
-            truncate -s ${TARGET_SIZE} recovery.img.tmp && mv recovery.img.tmp recovery.img
-        else
-            echo "Image already >= 32MB, using as-is"
-            mv recovery.img.tmp recovery.img
-        fi
-        
-        FINAL_SIZE=$(stat -c%s recovery.img)
-        echo "Final size: ${FINAL_SIZE} bytes"
-        
-        echo "=== Step 5: Verify image ==="
-        ls -lh recovery.img
-        echo ""
-        echo "=== First 128 bytes (header) ==="
-        xxd -l 128 recovery.img
-        echo ""
-        echo "=== Android signature check ==="
-        head -c 8 recovery.img | xxd
-        if head -c 8 recovery.img | grep -q "ANDROID"; then
-            echo "✅ Android signature verified"
-        else
-            echo "❌ Android signature NOT FOUND"
-        fi
-        
-        echo "=== Image structure ==="
-        unpackbootimg -i recovery.img 2>/dev/null || echo "Image created successfully"
-
-    - name: Create flashable zip
-      run: |
-        echo "=== Creating flashable zip ==="
-        
-        # Очищаем старые файлы
-        rm -rf META-INF 2>/dev/null || true
-        
-        mkdir -p META-INF/com/google/android
-        
-        # updater-script
-        cat > META-INF/com/google/android/updater-script << 'EOF'
-#SaluteTV at30a6 TWRP Recovery Installer
-ui_print(" ");
-ui_print("========================================");
-ui_print(" SaluteTV at30a6 TWRP Recovery ");
-ui_print("========================================");
-ui_print(" ");
-ui_print("Flashing recovery...");
-show_progress(0.5, 0);
-
-# Проверяем устройство
-assert(getprop("ro.product.device") == "at30a6" || 
-       getprop("ro.build.product") == "at30a6" ||
-       abort("This package is for \"at30a6\" devices; this is a \"" + getprop("ro.product.device") + "\"."));
-
-# Прошиваем recovery
-package_extract_file("recovery.img", "/dev/block/by-name/recovery");
-
-ui_print(" ");
-ui_print("Done!");
-ui_print(" ");
-ui_print("To boot into recovery:");
-ui_print("1. Power off device");
-ui_print("2. Press Vol+ and Power");
-show_progress(1.0, 1);
-ui_print(" ");
-EOF
-        
-        # update-binary
-        cat > META-INF/com/google/android/update-binary << 'EOF'
-#!/sbin/sh
-#
-# TWRP Recovery Installer for SaluteTV at30a6
-#
-
-OUTFD=$2
-ZIPFILE=$3
-
-ui_print() {
-  echo -e "ui_print $1\n" > /proc/self/fd/$OUTFD
-  echo -e "ui_print\n" > /proc/self/fd/$OUTFD
-}
-
-set_progress() {
-  echo "set_progress $1" > /proc/self/fd/$OUTFD
-}
-
-# Начало установки
-ui_print "Starting TWRP installation..."
-set_progress 0.1
-
-# Проверка на TWRP recovery
-if [ -f "/sbin/sh" ]; then
-    ui_print "Running in TWRP recovery"
-else
-    ui_print "Warning: Not in TWRP recovery"
-fi
-
-set_progress 0.3
-
-# Извлекаем файлы
-ui_print "Extracting files..."
-unzip -o "$ZIPFILE" "recovery.img" -d /tmp
-
-if [ $? -ne 0 ]; then
-    ui_print "Error: Failed to extract recovery.img"
-    exit 1
-fi
-
-set_progress 0.6
-
-# Флешим recovery
-ui_print "Flashing recovery image..."
-dd if=/tmp/recovery.img of=/dev/block/by-name/recovery bs=4096
-
-if [ $? -ne 0 ]; then
-    ui_print "Error: Failed to flash recovery"
-    exit 1
-fi
-
-set_progress 0.9
-
-# Очистка
-rm -f /tmp/recovery.img
-
-ui_print "Installation complete!"
-set_progress 1.0
-
-exit 0
-EOF
-        chmod 755 META-INF/com/google/android/update-binary
-        
-        # Файл совместимости (для старых рекавери)
-        cat > META-INF/com/google/android/update-binary-installer << 'EOF'
-#!/sbin/sh
-# Compatibility wrapper
-exec /sbin/update_binary "$@"
-EOF
-        chmod 755 META-INF/com/google/android/update-binary-installer
-        
-        # Добавляем файлы в архив
-        echo "Creating ZIP archive..."
-        zip -r9 twrp_at30a6.zip META-INF/ recovery.img
-        
-        ZIP_SIZE=$(stat -c%s twrp_at30a6.zip)
-        echo "ZIP size: ${ZIP_SIZE} bytes"
-        
-        # Создаем файл с информацией
-        cat > build-info.txt << EOF
-SaluteTV at30a6 TWRP Recovery Build
-====================================
-Build Date: $(date)
-Recovery Size: $(stat -c%s recovery.img) bytes
-ZIP Size: ${ZIP_SIZE} bytes
-Ramdisk Size: $(stat -c%s ramdisk.gz) bytes
-Kernel Size: $(stat -c%s prebuilt/kernel) bytes
-DTB Size: $(stat -c%s prebuilt/dt.img) bytes
-
-Parameters:
-- Base: 0x10000000
-- Kernel Offset: 0x00008000
-- Ramdisk Offset: 0x01000000
-- Tags Offset: 0x00000100
-- Page Size: 2048
-- Cmdline: 30a6
-- Board: at30a6
-EOF
-        
-        echo "=== Build information ==="
-        cat build-info.txt
-
-    - name: Upload artifacts
+    - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP-Recovery
+        name: TWRP-Recovery-at30a6
         path: |
-          recovery.img
-          twrp_at30a6.zip
-          ramdisk.gz
-          build-info.txt
-        retention-days: 90
+          twrp_build/out/target/product/at30a6/recovery.img
+          twrp_build/out/target/product/at30a6/recovery.log
+        retention-days: 7
