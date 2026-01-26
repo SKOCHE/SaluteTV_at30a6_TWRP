@@ -50,77 +50,44 @@ jobs:
         chmod a+x ~/bin/repo
         sudo cp ~/bin/repo /usr/bin/repo
 
-    - name: Initialize TWRP Source
+    - name: Initialize TWRP Source (twrp-11)
       run: |
         mkdir -p twrp_build
         cd twrp_build
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
-        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp -b twrp-12.1
+        # Используем twrp-11 - более стабильную версию
+        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp -b twrp-11
 
     - name: Sync Source Code
       run: |
         cd twrp_build
         repo sync -c -j2 --no-tags --no-clone-bundle --force-sync
 
-    - name: Apply libbinder Patch
+    - name: Fix libbinder issue
       run: |
         cd twrp_build
-        echo "=== Применяем патч для libbinder ==="
-        
-        # Создаем патч для frameworks/native/libs/binder/Android.bp
-        cat > libbinder_fix.patch << 'PATCHEOF'
---- a/frameworks/native/libs/binder/Android.bp
-+++ b/frameworks/native/libs/binder/Android.bp
-@@ -146,7 +146,7 @@
-         "-Wno-missing-field-initializers",
-     ],
- 
--    version_script: "libbinder.map.txt",
-+    # version_script: "libbinder.map.txt",  # Комментируем проблемную строку
- 
-     sanitize: {
-         misc_undefined: ["integer"],
-PATCHEOF
-        
-        # Пробуем применить патч
-        patch -p1 -f < libbinder_fix.patch || echo "Патч не применен, возможно уже исправлено"
-        
-        # Альтернативный способ - просто отключить version_script
-        sed -i 's/version_script: "libbinder.map.txt",/# version_script: "libbinder.map.txt",/' frameworks/native/libs/binder/Android.bp 2>/dev/null || true
+        echo "=== Исправляем libbinder ==="
+        # Просто удаляем problem строку
+        sed -i '/version_script: "libbinder.map.txt",/d' frameworks/native/libs/binder/Android.bp 2>/dev/null || true
 
     - name: Copy Device Tree
       run: |
         echo "=== Копирование дерева устройства ==="
         mkdir -p twrp_build/device/salute/at30a6
         
-        # Копируем всё кроме .git и yml файлов
-        rsync -av --progress \
-          --exclude='.git' \
-          --exclude='twrp_build' \
-          --exclude='*.yml' \
-          --exclude='*.yaml' \
-          ./ twrp_build/device/salute/at30a6/
+        # Копируем всё
+        cp -r * twrp_build/device/salute/at30a6/ 2>/dev/null || true
+        cp -r .* twrp_build/device/salute/at30a6/ 2>/dev/null || true
         
-        # Проверяем, что скопировалось
         cd twrp_build/device/salute/at30a6
         echo "=== Содержимое директории устройства ==="
         ls -la
         
         # Если нет recovery.fstab, создаем из twrp.flags
-        if [ ! -f "recovery.fstab" ]; then
-          echo "=== Создание recovery.fstab ==="
-          if [ -f "recovery/root/system/etc/twrp.flags" ]; then
-            echo "Создаю recovery.fstab из twrp.flags"
-            cp recovery/root/system/etc/twrp.flags recovery.fstab
-          elif [ -f "fstab.amlogic" ]; then
-            echo "Создаю recovery.fstab из fstab.amlogic"
-            cp fstab.amlogic recovery.fstab
-          fi
+        if [ ! -f "recovery.fstab" ] && [ -f "recovery/root/system/etc/twrp.flags" ]; then
+          cp recovery/root/system/etc/twrp.flags recovery.fstab
         fi
-        
-        echo "=== Проверка необходимых файлов ==="
-        ls -la *.mk recovery.fstab 2>/dev/null || echo "Некоторые файлы отсутствуют"
 
     - name: Set Swap Space
       uses: pierotofy/set-swap-space@master
@@ -137,10 +104,8 @@ PATCHEOF
         source build/envsetup.sh
         lunch twrp_at30a6-eng
         make clean
-        
-        # Пробуем собрать с меньшим количеством потоков
         echo "=== Компиляция recoveryimage ==="
-        make recoveryimage -j1
+        make recoveryimage -j2
 
     - name: Upload Recovery Image
       uses: actions/upload-artifact@v4
