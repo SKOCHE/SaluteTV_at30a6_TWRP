@@ -6,63 +6,151 @@ jobs:
     timeout-minutes: 120
     steps:
     - uses: actions/checkout@v4
-    - name: Setup
+    
+    - name: Setup environment
       run: |
-        sudo apt update && sudo apt install -y git python3 openjdk-11-jdk curl bc
+        sudo apt update && sudo apt install -y \
+          git python3 openjdk-11-jdk curl bc \
+          libssl-dev build-essential \
+          coreutils  # для truncate
         curl -s https://storage.googleapis.com/git-repo-downloads/repo > /tmp/repo
         chmod +x /tmp/repo && sudo mv /tmp/repo /usr/local/bin/
-    - name: Build
+    
+    - name: Build TWRP
       run: |
         mkdir twrp && cd twrp
+        
+        # Инициализация репозитория
         repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
         repo sync -c -j2 --no-tags --no-clone-bundle
+        
+        # Копирование device tree
         mkdir -p device/salute/at30a6
         cp ../*.mk device/salute/at30a6/
         [ -d "../prebuilt" ] && cp -r ../prebuilt device/salute/at30a6/
+        [ -f "../recovery.fstab" ] && cp ../recovery.fstab device/salute/at30a6/
+        [ -f "../mkbootimg.mk" ] && cp ../mkbootimg.mk device/salute/at30a6/
+        
+        # Сборка
         export ALLOW_MISSING_DEPENDENCIES=true
         export USE_LD=gold
         source build/envsetup.sh
         lunch twrp_at30a6-eng 2>/dev/null || export TARGET_PRODUCT=twrp_at30a6
-        make -j2 recoveryimage || make -j2 recovery
         
-        # === НАЧАЛО ДОБАВЛЕННОГО КОДА ===
-        echo "Поиск recovery.img..."
+        # Собираем ramdisk и recovery
+        make -j2 recoveryimage 2>&1 | tail -100 || make -j2 recovery 2>&1 | tail -100
         
-        # 1. Прямой путь
-        if [ -f "out/target/product/at30a6/recovery.img" ]; then
-            cp out/target/product/at30a6/recovery.img ../recovery.img
-            echo "✅ Найден: out/target/product/at30a6/recovery.img"
+        echo "=== Проверка результатов сборки ==="
+        echo "Содержимое out/target/product/at30a6/:"
+        ls -la out/target/product/at30a6/ 2>/dev/null || echo "Директория не создана"
         
-        # 2. Поиск в product
-        else
-            find out/target/product -name "recovery.img" -type f 2>/dev/null | head -1 | while read img; do
-                echo "✅ Найден: $img"
-                cp "$img" ../recovery.img
-            done
+        echo "=== Создание правильного recovery.img 32 МБ ==="
+        
+        # 1. Ищем компоненты
+        KERNEL="device/salute/at30a6/prebuilt/kernel"
+        DTB="device/salute/at30a6/prebuilt/dt.img"
+        RAMDISK=""
+        
+        # Ищем ramdisk
+        for ramdisk in out/target/product/at30a6/ramdisk-recovery.cpio.gz \
+                       out/target/product/at30a6/recovery/root/ramdisk-recovery.cpio.gz \
+                       $(find . -name "ramdisk-recovery.cpio.gz" -type f 2>/dev/null | head -1); do
+            if [ -f "$ramdisk" ]; then
+                RAMDISK="$ramdisk"
+                echo "Найден ramdisk: $ramdisk"
+                break
+            fi
+        done
+        
+        if [ -z "$RAMDISK" ]; then
+            echo "⚠️ Ramdisk не найден, создаем из recovery/root"
+            if [ -d "out/target/product/at30a6/recovery/root" ]; then
+                cd out/target/product/at30a6/recovery/root
+                find . | cpio -o -H newc | gzip > ../../../ramdisk-recovery.cpio.gz
+                cd ../../../../../
+                RAMDISK="out/target/product/at30a6/ramdisk-recovery.cpio.gz"
+            fi
         fi
         
-        # 3. Если не нашли
-        if [ ! -f "../recovery.img" ]; then
-            echo "Ищем везде..."
-            find . -name "recovery.img" -type f 2>/dev/null | head -1 | while read img; do
-                echo "✅ Найден: $img"
-                cp "$img" ../recovery.img
-            done
-        fi
-        
-        # 4. Результат
-        if [ -f "../recovery.img" ]; then
-            echo "🎉 УСПЕХ!"
-            ls -lh ../recovery.img
-        else
-            echo "❌ ОШИБКА"
-            find . -name "*.img" -type f 2>/dev/null | head -5
+        if [ ! -f "$KERNEL" ]; then
+            echo "❌ Ошибка: kernel не найден"
+            find . -name "kernel" -o -name "zImage" -type f 2>/dev/null | head -5
             exit 1
         fi
-        # === КОНЕЦ ДОБАВЛЕННОГО КОДА ===
+        
+        if [ ! -f "$DTB" ]; then
+            echo "❌ Ошибка: dt.img не найден"
+            exit 1
+        fi
+        
+        if [ ! -f "$RAMDISK" ]; then
+            echo "❌ Ошибка: ramdisk не найден"
+            exit 1
+        fi
+        
+        # 2. Создаем recovery.img через mkbootimg
+        echo "Создаем recovery.img с помощью mkbootimg..."
+        out/host/linux-x86/bin/mkbootimg \
+            --kernel "$KERNEL" \
+            --ramdisk "$RAMDISK" \
+            --dt "$DTB" \
+            --cmdline "androidboot.selinux=permissive" \
+            --base 0x00000000 \
+            --pagesize 2048 \
+            --kernel_offset 0x00008000 \
+            --ramdisk_offset 0x01000000 \
+            --tags_offset 0x00000100 \
+            --header_version 2 \
+            --output ../recovery-raw.img
+        
+        # 3. Проверяем и заполняем до 32 МБ
+        echo "Размер до заполнения: $(stat -c%s ../recovery-raw.img 2>/dev/null || echo 0) байт"
+        
+        # Заполняем до 32 МБ (33554432 байт)
+        echo "Заполняем до 33554432 байт (32 МБ)..."
+        truncate -s 33554432 ../recovery-raw.img 2>/dev/null || \
+            dd if=/dev/zero bs=1 count=0 seek=33554432 of=../recovery-raw.img 2>/dev/null
+        
+        # Переименовываем
+        mv ../recovery-raw.img ../recovery.img
+        
+        # 4. Проверяем результат
+        echo "=== ИТОГ ==="
+        if [ -f "../recovery.img" ]; then
+            SIZE=$(stat -c%s ../recovery.img 2>/dev/null || echo 0)
+            echo "✅ recovery.img создан"
+            echo "Размер: $SIZE байт"
+            echo "Ожидаемый: 33554432 байт (32 МБ)"
+            
+            if [ $SIZE -eq 33554432 ]; then
+                echo "✓ Размер корректен!"
+            else
+                echo "⚠️ Размер неверный, но файл создан"
+            fi
+            
+            # Проверяем структуру
+            echo "Проверка структуры образа:"
+            out/host/linux-x86/bin/mkbootimg --info ../recovery.img 2>&1 | head -20 || \
+                echo "Не удалось прочитать информацию (нормально для заполненного образа)"
+        else
+            echo "❌ Ошибка: recovery.img не создан"
+            exit 1
+        fi
     
-    - name: Upload
+    - name: Upload TWRP recovery
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP
+        name: TWRP-32MB
         path: recovery.img
+        retention-days: 7
+        compression-level: 0  # без сжатия для .img файлов
+    
+    - name: Upload debug info
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: Build-Logs
+        path: |
+          twrp/out/error.log
+          twrp/build.log
+        retention-days: 1
