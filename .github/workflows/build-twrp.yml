@@ -1,4 +1,4 @@
-name: Build TWRP
+name: Build TWRP (Android 13)
 
 on:
   workflow_dispatch:
@@ -8,104 +8,100 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120  # Увеличил таймаут
+    timeout-minutes: 120
 
     steps:
     - name: Checkout Device Tree
       uses: actions/checkout@v4
       with:
-        path: device_tree
+        path: local_device_tree
 
-    - name: Setup Build Environment & Install Tools
+    - name: Install Essential Build Tools
       run: |
-        # 1. Устанавливаем ВСЕ необходимые инструменты
         sudo apt-get update -y
+        # Установка МИНИМАЛЬНОГО набора для AOSP 13
         sudo apt-get install -y \
           git-core gnupg flex bison build-essential zip \
           curl zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 \
-          lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
-          libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3 \
-          repo  # <-- КРИТИЧЕСКИ ВАЖНО: Устанавливаем repo
+          libncurses5 lib32ncurses5-dev x11proto-core-dev libx11-dev \
+          lib32z1-dev liblz4-tool libssl-dev libxml2-utils xsltproc unzip \
+          fontconfig python2 python3 repo bc rsync schedtool
+    
+    - name: Prepare TWRP AOSP 13 Source
+      run: |
+        # 1. Клонируем TWRP манифест для Android 13
+        mkdir -p twrp_aosp_13
+        cd twrp_aosp_13
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-13.0
         
-        # 2. Настраиваем git (иначе repo ругается)
-        git config --global user.email "builder@github.com"
-        git config --global user.name "GitHub Builder"
-        git config --global color.ui false
-
-        # 3. Клонируем минимальный манифест TWRP (используем более свежую ветку twrp-14.0)
-        git clone https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git twrp_build -b twrp-14.0 --depth=1
-        cd twrp_build
-        
-        # 4. Создаем правильный путь для устройства
+        # 2. Создаем путь для устройства и копируем tree
         mkdir -p device/salute
-        cp -r ../device_tree/* device/salute/at30a6/
-
-    - name: Initialize Repo and Sync
-      run: |
-        cd twrp_build
+        cp -r ../local_device_tree device/salute/at30a6
         
-        # 1. Инициализируем repo
-        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-14.0 --depth=1
-        
-        # 2. Синхронизируем репозитории (может занять 10-15 минут)
+        # 3. Синхронизируем исходники
         repo sync -c -j$(nproc) --no-tags --no-clone-bundle --force-sync
-        
-        # 3. Проверяем, что дерево устройств на месте
-        echo "=== Проверка структуры ==="
-        ls -la device/salute/at30a6/
 
-    - name: Build Recovery
+    - name: Fix Android Version in BoardConfig.mk
       run: |
-        cd twrp_build
-        # Критически важные переменные окружения
+        cd twrp_aosp_13/device/salute/at30a6
+        # ИСПРАВЛЯЕМ критическую ошибку: меняем Android 11 на 13
+        sed -i 's/PLATFORM_VERSION := 11/PLATFORM_VERSION := 13/' BoardConfig.mk
+        sed -i 's/PLATFORM_SECURITY_PATCH := 2099-12-31/PLATFORM_SECURITY_PATCH := 2025-01-01/' BoardConfig.mk
+        echo "=== Проверка исправлений ==="
+        grep -n "PLATFORM_VERSION\|PLATFORM_SECURITY_PATCH" BoardConfig.mk
+
+    - name: Setup Build Environment
+      run: |
+        cd twrp_aosp_13
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
-        
-        # Настраиваем окружение сборки
         source build/envsetup.sh
-        
-        # Пытаемся запустить lunch, если не найдено - создаем вручную
-        if lunch twrp_at30a6-userdebug 2>/dev/null; then
-          echo "Устройство найдено в lunch"
-        else
-          echo "Создаем конфигурацию вручную..."
-          # Добавляем устройство вручную
-          export TARGET_DEVICE=at30a6
-          export TARGET_PRODUCT=twrp_at30a6
+
+    - name: Build TWRP Recovery
+      run: |
+        cd twrp_aosp_13
+        # Пробуем lunch (должен работать после исправлений)
+        if ! lunch twrp_at30a6-userdebug; then
+          echo "Ошибка lunch, проверяем доступные устройства..."
+          lunch
+          exit 1
         fi
         
-        # Собираем только recovery
-        echo "=== Начинаем сборку recovery ==="
+        # Собираем recovery с подробным логом
+        echo "=== Начало сборки recovery ==="
         mka recoveryimage 2>&1 | tee build.log
-        
-        # Проверяем результат
+
+    - name: Check Build Result
+      run: |
+        cd twrp_aosp_13
         if [ -f out/target/product/at30a6/recovery.img ]; then
-          echo "✅ SUCCESS: recovery.img создан!"
+          echo "✅ SUCCESS! Recovery image created:"
           ls -lh out/target/product/at30a6/recovery.img
+          echo "File size: $(stat -c%s out/target/product/at30a6/recovery.img) bytes"
         else
-          echo "❌ FAIL: recovery.img не найден"
-          echo "Последние строки лога:"
-          tail -50 build.log
+          echo "❌ FAILED! Recovery image not found"
+          echo "Последние 100 строк лога:"
+          tail -100 build.log
           exit 1
         fi
 
-    - name: Upload Artifacts
+    - name: Upload Recovery Image
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP-at30a6-Artifacts
+        name: TWRP-at30a6-Android13
         path: |
-          twrp_build/out/target/product/at30a6/recovery.img
-          twrp_build/build.log
-          twrp_build/device/salute/at30a6/BoardConfig.mk
+          twrp_aosp_13/out/target/product/at30a6/recovery.img
+          twrp_aosp_13/build.log
         retention-days: 7
 
-    - name: Upload Build Log on Failure
+    - name: Upload Debug Info on Failure
       if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: Build-Failure-Logs
+        name: Build-Debug-Info
         path: |
-          twrp_build/build.log
-          twrp_build/device/salute/at30a6/*
+          twrp_aosp_13/build.log
+          twrp_aosp_13/device/salute/at30a6/BoardConfig.mk
+          twrp_aosp_13/device/salute/at30a6/*.mk
         retention-days: 30
