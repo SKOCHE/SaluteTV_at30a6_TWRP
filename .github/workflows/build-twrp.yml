@@ -40,81 +40,42 @@ jobs:
           --depth=1
         /usr/local/bin/repo sync -c -j2 --no-tags --no-clone-bundle
 
-    # Шаг 4: Копирование дерева устройства ПРАВИЛЬНО
+    # Шаг 4: Копирование дерева устройства
     - name: Copy device tree
       run: |
-        echo "=== Копирование файлов дерева устройства ==="
-        
-        # Создаем структуру директорий
         mkdir -p twrp/device/salute/${{ github.event.inputs.device_codename }}
-        
-        # Список всех файлов в репозитории (кроме .git и yml)
-        echo "Содержимое текущего каталога:"
-        ls -la
-        
-        # Копируем ВСЕ файлы из текущего репозитория
-        find . -maxdepth 1 -type f ! -name ".git*" ! -name "*.yml" ! -name "*.yaml" \
-          -exec cp {} twrp/device/salute/${{ github.event.inputs.device_codename }}/ \;
-        
-        # Копируем все директории (кроме .git)
-        for dir in $(find . -maxdepth 1 -type d ! -name ".git" ! -name "." ! -name "twrp"); do
-          if [ -d "$dir" ]; then
-            echo "Копирую директорию: $dir"
-            cp -r "$dir" twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
-          fi
-        done
-        
-        # Проверяем что скопировалось
-        echo "=== Содержимое device/salute/${{ github.event.inputs.device_codename }} ==="
-        ls -la twrp/device/salute/${{ github.event.inputs.device_codename }}/
+        # Копируем ВСЁ
+        cp -r * twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
+        cp -r .* twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
 
-    # Шаг 5: Проверка и создание недостающих файлов
-    - name: Verify device tree
-      run: |
-        cd twrp/device/salute/${{ github.event.inputs.device_codename }}
-        echo "=== Проверка файлов устройства ==="
-        
-        # Проверяем наличие ключевых файлов
-        for file in AndroidProducts.mk twrp_at30a6.mk device.mk BoardConfig.mk recovery.fstab; do
-          if [ -f "$file" ]; then
-            echo "✓ Найден: $file"
-          else
-            echo "✗ Отсутствует: $file"
-          fi
-        done
-
-    # Шаг 6: Исправление libbinder
+    # Шаг 5: Исправление libbinder
     - name: Fix libbinder error
       run: |
         cd twrp
-        # Быстрое исправление libbinder
-        find frameworks/native/libs/binder -name "Android.bp" -type f \
-          -exec sed -i 's/version_script: "libbinder.map.txt",/# version_script: "libbinder.map.txt",/' {} \; 2>/dev/null || true
+        sed -i '/version_script: "libbinder.map.txt"/d' frameworks/native/libs/binder/Android.bp 2>/dev/null || true
 
-    # Шаг 7: Сборка
-    - name: Build recovery
+    # Шаг 6: Прямая сборка БЕЗ lunch
+    - name: Build recovery directly
       run: |
         cd twrp
+        
+        # Экспорт переменных
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
+        export TARGET_DEVICE=${{ github.event.inputs.device_codename }}
+        export TARGET_PRODUCT=twrp_${{ github.event.inputs.device_codename }}
+        
+        # Инициализация окружения
         source build/envsetup.sh
         
-        # Сначала проверяем доступные устройства
-        echo "=== Доступные устройства ==="
-        ls device/salute/ || true
+        # Вместо lunch устанавливаем переменные напрямую
+        export TARGET_BUILD_VARIANT=eng
+        export TARGET_BUILD_TYPE=release
         
-        # Пробуем запустить сборку
-        if [ -d "device/salute/${{ github.event.inputs.device_codename }}" ]; then
-          echo "Устройство найдено, запускаю lunch..."
-          lunch twrp_${{ github.event.inputs.device_codename }}-eng
-          make clean
-          make recoveryimage -j2
-        else
-          echo "ОШИБКА: device/salute/${{ github.event.inputs.device_codename }} не найден!"
-          exit 1
-        fi
-
-    # Шаг 8: Загрузка
+        echo "=== Собираю recoveryimage ==="
+        make -j2 recoveryimage
+        
+    # Шаг 7: Загрузка
     - name: Upload recovery image
       if: success()
       uses: actions/upload-artifact@v4
