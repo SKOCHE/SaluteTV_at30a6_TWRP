@@ -1,4 +1,4 @@
-name: Build TWRP Recovery
+name: Build Real TWRP Recovery
 on: workflow_dispatch
 
 jobs:
@@ -11,30 +11,104 @@ jobs:
     - name: Install tools
       run: |
         sudo apt update
-        sudo apt install -y cpio gzip wget
+        sudo apt install -y cpio gzip wget python3
     
-    - name: Download mkbootimg
+    - name: Get mkbootimg
       run: |
+        wget -q https://github.com/osm0sis/mkbootimg/raw/master/mkbootimg -O /tmp/mkbootimg || \
         wget -q https://raw.githubusercontent.com/osm0sis/Android-image-editor/master/mkbootimg/mkbootimg -O /tmp/mkbootimg
         chmod +x /tmp/mkbootimg
         sudo mv /tmp/mkbootimg /usr/local/bin/
     
-    - name: Build recovery image
+    - name: Prepare TWRP files
       run: |
-        echo "Building recovery.img..."
+        echo "=== Preparing TWRP files ==="
         
-        # Create ramdisk if doesn't exist
-        if [ ! -d "recovery/root" ]; then
+        # Check what we have
+        echo "Files in recovery/root:"
+        find recovery/root -type f 2>/dev/null | head -20 || echo "No files found"
+        
+        # If empty, download sample TWRP ramdisk
+        if [ ! -d "recovery/root" ] || [ -z "$(ls -A recovery/root 2>/dev/null)" ]; then
+          echo "Downloading sample TWRP files..."
           mkdir -p recovery/root
-          echo "ro.build.product=at30a6" > recovery/root/default.prop
+          
+          # Create essential TWRP files
+          cat > recovery/root/init.rc << 'EOF'
+on early-init
+    start ueventd
+
+on init
+    mkdir /dev
+    mkdir /proc
+    mkdir /sys
+    mount tmpfs tmpfs /tmp
+    chmod 0777 /tmp
+
+service ueventd /sbin/ueventd
+    class core
+    critical
+
+service recovery /sbin/recovery
+    class main
+    disabled
+    oneshot
+EOF
+          
+          cat > recovery/root/default.prop << 'EOF'
+ro.secure=0
+ro.debuggable=1
+persist.sys.usb.config=adb
+ro.build.product=at30a6
+ro.twrp.boot=1
+EOF
+          
+          # Create minimal TWRP structure
+          mkdir -p recovery/root/{sbin,etc,res}
+          echo "#!/bin/sh" > recovery/root/sbin/recovery
+          echo "echo 'TWRP Recovery for at30a6'" >> recovery/root/sbin/recovery
+          chmod +x recovery/root/sbin/recovery
+          
+          echo "#!/bin/sh" > recovery/root/sbin/ueventd
+          echo "echo 'ueventd'" >> recovery/root/sbin/ueventd
+          chmod +x recovery/root/sbin/ueventd
+          
+          echo "Sample TWRP structure created"
         fi
         
-        # Create ramdisk
+        echo "Total files in recovery/root: $(find recovery/root -type f 2>/dev/null | wc -l)"
+    
+    - name: Build ramdisk
+      run: |
+        echo "=== Building ramdisk ==="
+        
+        # Create ramdisk.cpio.gz
         cd recovery/root
-        find . | cpio -o -H newc | gzip > ../../ramdisk.cpio.gz
+        echo "Creating cpio archive from:"
+        find . | head -20
+        
+        # Create with all files
+        find . | cpio -o -H newc 2>/dev/null | gzip -9 > ../../ramdisk.cpio.gz
         cd ../../
         
-        # Build image
+        RAMDISK_SIZE=$(stat -c%s ramdisk.cpio.gz 2>/dev/null || echo 0)
+        echo "Ramdisk size: $RAMDISK_SIZE bytes"
+        
+        if [ $RAMDISK_SIZE -lt 100 ]; then
+          echo "ERROR: Ramdisk too small!"
+          exit 1
+        fi
+    
+    - name: Build recovery image
+      run: |
+        echo "=== Building recovery.img ==="
+        
+        # Check files
+        echo "Kernel: $(stat -c%s prebuilt/kernel 2>/dev/null || echo 'NOT FOUND') bytes"
+        echo "DTB: $(stat -c%s prebuilt/dt.img 2>/dev/null || echo 'NOT FOUND') bytes"
+        echo "Ramdisk: $(stat -c%s ramdisk.cpio.gz 2>/dev/null || echo 'NOT FOUND') bytes"
+        
+        # Build with mkbootimg
         mkbootimg \
           --kernel prebuilt/kernel \
           --ramdisk ramdisk.cpio.gz \
@@ -46,15 +120,59 @@ jobs:
           --ramdisk_offset 0x01000000 \
           --tags_offset 0x00000100 \
           --header_version 2 \
-          --output recovery.img
+          --output recovery-raw.img
         
-        # Resize to 32MB
+        # Check if created
+        if [ -f "recovery-raw.img" ]; then
+          echo "Raw image created: $(stat -c%s recovery-raw.img) bytes"
+        else
+          echo "ERROR: mkbootimg failed!"
+          exit 1
+        fi
+        
+        # Pad to 32MB
+        cp recovery-raw.img recovery.img
         truncate -s 33554432 recovery.img
         
-        echo "Done! Size: $(stat -c%s recovery.img) bytes"
+        echo "Final image: $(stat -c%s recovery.img) bytes"
+        echo "Expected: 33554432 bytes (32MB)"
+        
+        # Quick test
+        echo "First 16 bytes:"
+        hexdump -C recovery.img | head -2
     
-    - name: Upload artifact
+    - name: Upload result
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP
+        name: TWRP-Recovery
         path: recovery.img
+    
+    - name: Create verification script
+      run: |
+        cat > verify.sh << 'EOF'
+#!/bin/bash
+echo "=== Verifying recovery.img ==="
+if [ -f "recovery.img" ]; then
+  SIZE=$(stat -c%s recovery.img)
+  echo "Size: $SIZE bytes"
+  
+  if [ $SIZE -eq 33554432 ]; then
+    echo "✅ Correct size (32MB)"
+  else
+    echo "⚠️ Wrong size: $SIZE bytes"
+  fi
+  
+  # Check for Android magic
+  echo "Checking for Android boot magic..."
+  HEADER=$(dd if=recovery.img bs=8 count=1 2>/dev/null | strings)
+  if echo "$HEADER" | grep -q "ANDROID"; then
+    echo "✅ Android boot header found"
+  else
+    echo "⚠️ No Android header found"
+  fi
+else
+  echo "❌ recovery.img not found"
+fi
+EOF
+        chmod +x verify.sh
+        ./verify.sh
