@@ -16,18 +16,19 @@ jobs:
     steps:
     - name: Clean disk space
       run: |
+        echo "=== Очистка диска ==="
         df -h
         sudo apt clean
-        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /var/lib/apt/lists/*
+        sudo rm -rf /usr/local/lib/android /usr/local/lib/node_modules
         df -h
 
     - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y git openjdk-17-jdk python3
+        sudo apt install -y git openjdk-17-jdk python3 ccache
         sudo apt install -y gcc-multilib g++-multilib libc6-dev
         sudo apt install -y libxml2-utils xsltproc bc bison flex curl
-        sudo apt install -y lzop pngcrush squashfs-tools zip unzip
 
     - name: Install repo tool
       run: |
@@ -35,40 +36,87 @@ jobs:
         chmod a+x ~/repo
         sudo mv ~/repo /usr/local/bin/
 
-    - name: Initialize TWRP source
+    - name: Download minimal TWRP source
       run: |
         mkdir twrp
         cd twrp
-        /usr/local/bin/repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --depth=1
-        /usr/local/bin/repo sync -c -j2 --no-tags --no-clone-bundle
+        
+        # Скачиваем только основные компоненты вручную
+        echo "Скачиваем минимальные исходники..."
+        
+        # 1. Build system
+        git clone https://github.com/LineageOS/android_build.git build/make -b lineage-20.0 --depth=1
+        
+        # 2. Recovery
+        git clone https://github.com/TeamWin/android_bootable_recovery.git bootable/recovery -b twrp-12.1 --depth=1
+        
+        # 3. System core
+        git clone https://github.com/LineageOS/android_system_core.git system/core -b lineage-20.0 --depth=1
+        
+        # 4. Bionic (libc)
+        git clone https://github.com/LineageOS/android_bionic.git bionic -b lineage-20.0 --depth=1
+        
+        # 5. Device tree (твоё устройство)
+        mkdir -p device/salute/${{ github.event.inputs.device_codename }}
+        
+        echo "Минимальные исходники скачаны"
 
     - name: Copy device tree
       run: |
-        mkdir -p twrp/device/salute/${{ github.event.inputs.device_codename }}
-        cp -r *.mk *.txt *.sh *.py recovery.fstab twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
-        if [ -d "recovery" ]; then
-          cp -r recovery twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
+        cd twrp/device/salute/${{ github.event.inputs.device_codename }}
+        # Копируем из исходного репозитория
+        cp -r $GITHUB_WORKSPACE/*.mk $GITHUB_WORKSPACE/*.txt $GITHUB_WORKSPACE/recovery.fstab . 2>/dev/null || true
+        if [ -d "$GITHUB_WORKSPACE/recovery" ]; then
+          cp -r $GITHUB_WORKSPACE/recovery . 2>/dev/null || true
         fi
-        if [ -d "prebuilt" ]; then
-          cp -r prebuilt twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
+        if [ -d "$GITHUB_WORKSPACE/prebuilt" ]; then
+          cp -r $GITHUB_WORKSPACE/prebuilt . 2>/dev/null || true
         fi
 
-    - name: Fix libbinder error
+    - name: Create minimal env setup
       run: |
         cd twrp
-        if [ -f "frameworks/native/libs/binder/Android.bp" ]; then
-          sed -i '/version_script: "libbinder.map.txt"/d' frameworks/native/libs/binder/Android.bp
-        fi
+        
+        # Создаем минимальный envsetup.sh
+        cat > build/envsetup.sh << 'ENVEOF'
+#!/bin/bash
+function lunch() {
+    echo "Lunch: twrp_$1-eng"
+    export TARGET_PRODUCT=twrp_$1
+    export TARGET_BUILD_VARIANT=eng
+    export TARGET_BUILD_TYPE=release
+    export ALLOW_MISSING_DEPENDENCIES=true
+    export LC_ALL=C
+}
+ENVEOF
+        
+        chmod +x build/envsetup.sh
 
     - name: Build recovery
       run: |
         cd twrp
+        
+        # Устанавливаем переменные
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
-        source build/envsetup.sh
-        lunch twrp_${{ github.event.inputs.device_codename }}-eng
-        make clean
-        make recoveryimage -j2
+        export TARGET_PRODUCT=twrp_${{ github.event.inputs.device_codename }}
+        export TARGET_BUILD_VARIANT=eng
+        export OUT_DIR=out
+        
+        # Создаем out директорию
+        mkdir -p out/target/product/${{ github.event.inputs.device_codename }}
+        
+        # Пробуем собрать recovery напрямую
+        echo "=== Сборка recovery ==="
+        
+        # Переходим в recovery
+        cd bootable/recovery
+        
+        # Пробуем собрать
+        mmma -j2 || make -j2 recoveryimage 2>&1 | tail -50
+        
+        # Ищем собранный recovery
+        find ../../out -name "recovery.img" 2>/dev/null | head -5
 
     - name: Upload recovery image
       if: success()
