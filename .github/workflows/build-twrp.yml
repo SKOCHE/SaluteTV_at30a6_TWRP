@@ -52,25 +52,27 @@ jobs:
 
     - name: Initialize TWRP Source
       run: |
-        mkdir -p workspace
-        cd workspace
+        mkdir -p twrp_build
+        cd twrp_build
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
         repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp -b twrp-12.1
 
     - name: Sync Source Code
       run: |
-        cd workspace
+        cd twrp_build
         repo sync -c -j2 --no-tags --no-clone-bundle --force-sync
 
     - name: Copy Device Tree
       run: |
-        mkdir -p workspace/device/salute/at30a6
-        cp -r $GITHUB_WORKSPACE/* workspace/device/salute/at30a6/
-        # Фиксим возможные ошибки в BoardConfig.mk
-        cd workspace/device/salute/at30a6
-        if [ -f BoardConfig.mk ]; then
-          sed -i '/BOARD_CUSTOM_BOOTIMG_MK.*mkbootimg\.mk/d' BoardConfig.mk 2>/dev/null || true
+        # Копируем только файлы дерева устройства, исключая workspace
+        mkdir -p twrp_build/device/salute/at30a6
+        find . -maxdepth 1 -type f -name "*.mk" -o -name "*.xml" -o -name "Android*" -o -name "*Board*" | xargs -I {} cp {} twrp_build/device/salute/at30a6/ || true
+        if [ -d device ]; then
+          cp -r device/* twrp_build/device/salute/at30a6/ || true
+        fi
+        if [ -d recovery ]; then
+          cp -r recovery twrp_build/device/salute/at30a6/ || true
         fi
 
     - name: Set Swap Space
@@ -80,7 +82,7 @@ jobs:
 
     - name: Build Recovery
       run: |
-        cd workspace
+        cd twrp_build
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
         
@@ -94,13 +96,13 @@ jobs:
       if: success()
       with:
         name: recovery-at30a6
-        path: workspace/out/target/product/at30a6/recovery.img
+        path: twrp_build/out/target/product/at30a6/recovery.img
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
       if: success()
       with:
-        files: workspace/out/target/product/at30a6/recovery.img
+        files: twrp_build/out/target/product/at30a6/recovery.img
         name: "TWRP at30a6"
         tag_name: "build-${{ github.run_number }}"
         body: |
