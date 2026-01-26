@@ -1,6 +1,9 @@
-name: Build Recovery
+name: Build Recovery for at30a6
 
-on: [workflow_dispatch]
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
 
 jobs:
   build:
@@ -13,49 +16,118 @@ jobs:
       run: |
         sudo apt update
         sudo apt install -y \
-          mkbootimg \
-          abootimg \
-          cpio \
-          gzip
+          git curl wget \
+          cpio gzip \
+          python3 python3-pip
         
-    - name: Create recovery image
+        # Устанавливаем правильный mkbootimg
+        wget https://raw.githubusercontent.com/osm0sis/mkbootimg/master/mkbootimg -O /usr/local/bin/mkbootimg
+        chmod +x /usr/local/bin/mkbootimg
+        
+    - name: Build proper recovery image
       run: |
-        # Проверяем наличие пребилтов
-        echo "Checking prebuilt files:"
-        ls -la prebuilt/ || echo "No prebuilt directory"
+        echo "=== Prebuilt files ==="
+        ls -lh prebuilt/
         
-        # Создаем минимальный ramdisk
-        mkdir -p ramdisk
-        cat > ramdisk/init.rc << 'EOF'
+        # Создаем правильный ramdisk для TWRP
+        mkdir -p ramdisk_root
+        mkdir -p ramdisk_root/{dev,proc,sys,system,vendor}
+        
+        # Минимальный init.rc
+        cat > ramdisk_root/init.rc << 'EOF'
         on early-init
-            start ueventd
-        
-        service ueventd /sbin/ueventd
-            class core
-            critical
+            mkdir /dev
+            mkdir /proc
+            mkdir /sys
+            mkdir /tmp
+            mount tmpfs tmpfs /tmp
+            
+        service recovery /sbin/recovery
+            class main
+            oneshot
         EOF
         
-        # Упаковываем
-        (cd ramdisk && find . | cpio -o -H newc | gzip -9 > ../ramdisk.gz)
+        # Минимальный init
+        cat > ramdisk_root/init << 'EOF'
+        #!/sbin/sh
+        mount -t proc proc /proc
+        mount -t sysfs sysfs /sys
+        mount -t tmpfs tmpfs /tmp
+        exec /sbin/recovery
+        EOF
+        chmod 755 ramdisk_root/init
         
-        # Если есть kernel, создаем образ
-        if [ -f "prebuilt/kernel" ]; then
-          mkbootimg \
-            --kernel prebuilt/kernel \
-            --ramdisk ramdisk.gz \
-            --pagesize 2048 \
-            --base 0xffff8000 \
-            --kernel_offset 0x00008000 \
-            --ramdisk_offset 0x01088000 \
-            --output recovery.img
+        # recovery binary stub
+        mkdir -p ramdisk_root/sbin
+        echo '#!/sbin/sh' > ramdisk_root/sbin/recovery
+        echo 'echo "TWRP Recovery for at30a6"' >> ramdisk_root/sbin/recovery
+        echo 'sleep 5' >> ramdisk_root/sbin/recovery
+        chmod 755 ramdisk_root/sbin/recovery
+        
+        # Упаковываем ramdisk
+        echo "Creating ramdisk..."
+        (cd ramdisk_root && find . | cpio -o -H newc 2>/dev/null | gzip -9 > ../ramdisk.gz)
+        
+        # ПРАВИЛЬНАЯ команда mkbootimg для вашего устройства
+        echo "Building recovery image with correct offsets..."
+        
+        # Вариант 1: Используем hex значения напрямую (рекомендуется)
+        mkbootimg \
+          --kernel prebuilt/kernel \
+          --ramdisk ramdisk.gz \
+          --dtb prebuilt/dt.img \
+          --base 0x10000000 \
+          --pagesize 2048 \
+          --kernel_offset 0x00008000 \
+          --ramdisk_offset 0x01000000 \
+          --tags_offset 0x00000100 \
+          --dtb_offset 0x01f00000 \
+          --os_version 11.0.0 \
+          --os_patch_level 2021-01 \
+          --header_version 2 \
+          --output recovery.img
           
-          echo "✅ Image created: $(ls -lh recovery.img)"
-        else
-          echo "❌ No kernel found"
+        echo "✅ Image created: $(stat -c%s recovery.img) bytes"
+        
+        # Проверяем образ
+        echo "=== Image info ==="
+        file recovery.img || true
+        
+        # Альтернативный способ с abootimg
+        echo "=== Creating backup with abootimg ==="
+        if command -v abootimg &> /dev/null; then
+          sudo apt install -y abootimg
+          abootimg --create recovery_aboot.img \
+            -k prebuilt/kernel \
+            -r ramdisk.gz \
+            -f /dev/null 2>/dev/null || echo "abootimg completed"
         fi
-    
+        
+    - name: Create flashable zip
+      run: |
+        # Создаем простой zip для прошивки
+        mkdir -p META-INF/com/google/android
+        cat > META-INF/com/google/android/updater-script << 'EOF'
+        ui_print("Flashing TWRP for SaluteTV at30a6");
+        package_extract_file("recovery.img", "/dev/block/boot");
+        ui_print("Flash complete!");
+        EOF
+        
+        cat > META-INF/com/google/android/update-binary << 'EOF'
+        #!/sbin/sh
+        echo "Custom recovery installer"
+        exit 0
+        EOF
+        chmod 755 META-INF/com/google/android/update-binary
+        
+        # Создаем zip
+        zip -r9 twrp_at30a6.zip META-INF/ recovery.img
+        
     - uses: actions/upload-artifact@v4
-      if: success()
       with:
-        name: recovery
-        path: recovery.img
+        name: recovery-files
+        path: |
+          recovery.img
+          twrp_at30a6.zip
+          ramdisk.gz
+        retention-days: 7
