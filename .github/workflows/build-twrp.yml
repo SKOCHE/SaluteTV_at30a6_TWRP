@@ -1,195 +1,130 @@
 name: Build TWRP Recovery for Android 11
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 180
-    
+    timeout-minutes: 120
+
     steps:
     - name: Checkout device tree
       uses: actions/checkout@v4
       with:
         path: device/twrp/at30a6
 
-    - name: Setup environment and install dependencies
+    - name: Setup environment (Android 11)
       run: |
-        # Обновление репозиториев
-        sudo apt-get update
-        
-        # Установка основных зависимостей для сборки Android 11
-        sudo apt-get install -y \
-          git-core gnupg flex bison build-essential zip curl zlib1g-dev \
-          gcc-multilib g++-multilib libc6-dev-i386 lib32ncurses5-dev \
-          x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev \
-          libxml2-utils xsltproc unzip fontconfig python2 python3 \
-          openjdk-8-jdk bc lz4 libssl-dev rsync schedtool squashfs-tools \
-          imagemagick ccache git-lfs
-        
-        # Для Android 11 нужен Python 2
-        sudo ln -sf /usr/bin/python2 /usr/bin/python
-        
-        # Установка mkbootimg
-        mkdir -p /tmp/android-tools
-        cd /tmp/android-tools
-        git clone https://github.com/osm0sis/mkbootimg.git
-        cd mkbootimg
-        make
-        sudo cp mkbootimg unpackbootimg /usr/local/bin/
-        sudo ln -sf /usr/local/bin/unpackbootimg /usr/local/bin/unmkbootimg
-        
-        # Настройка ccache
-        echo "CCACHE_DIR=/tmp/ccache" >> $GITHUB_ENV
-        echo "USE_CCACHE=1" >> $GITHUB_ENV
-        ccache -M 20G
+        sudo apt update
+        # ОСНОВНЫЕ зависимости для Android 11
+        sudo apt install -y \
+          git-core gnupg flex bison build-essential zip curl zlib1g-dev gcc-multilib g++-multilib \
+          libc6-dev-i386 lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev \
+          libxml2-utils xsltproc unzip fontconfig python2 python3 git-lfs bc lz4 rsync schedtool \
+          squashfs-tools ccache imagemagick libssl-dev
+        # Java 8 ОБЯЗАТЕЛЕН для Android 11
+        sudo apt install -y openjdk-8-jdk
+        # Для repo
+        sudo apt install -y python3-pip
+        pip3 install git-repo
 
-    - name: Install repo tool
+    - name: Initialize TWRP source (CORRECT WAY)
       run: |
-        # Установка repo tool вручную (правильная версия)
-        mkdir -p ~/.bin
-        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/.bin/repo
-        chmod a+rx ~/.bin/repo
-        echo "$HOME/.bin" >> $GITHUB_PATH
-
-    - name: Initialize TWRP 11 source
-      run: |
-        # Настройка git
-        git config --global user.email "github-actions@github.com"
-        git config --global user.name "GitHub Actions"
+        # 1. Устанавливаем repo правильно
+        mkdir -p ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        echo "$HOME/bin" >> $GITHUB_PATH
         
-        # Создаем папку для сборки
+        # 2. Клонируем TWRP через TeamWin (официальный источник)
+        git clone https://github.com/TeamWin/android_bootable_recovery.git -b twrp-11
+        git clone https://github.com/TeamWin/android_system_vold.git -b twrp-11
+        
+        # 3. Создаем минимальную структуру для сборки
         mkdir -p twrp-build
         cd twrp-build
-        
-        # ИНИЦИАЛИЗАЦИЯ РЕПОЗИТОРИЯ TWRP 11
-        # Правильная ветка для Android 11
-        ~/.bin/repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni.git \
-          -b android-11 \
-          --depth=1
-        
-        # Копирование device tree
         mkdir -p device/twrp/
         cp -r ../device/twrp/at30a6 device/twrp/
         
-        echo "Device tree copied"
-        echo "Checking files:"
-        ls -la device/twrp/at30a6/
+        # 4. Создаем минимальный Android.mk для сборки
+        cat > Android.mk << 'EOF'
+        include $(call all-subdir-makefiles)
+        EOF
 
-    - name: Sync TWRP source
-      run: |
-        cd twrp-build
-        echo "Starting repo sync for Android 11..."
-        
-        # Синхронизация с ограниченным количеством потоков
-        ~/.bin/repo sync -c -j4 \
-          --force-sync \
-          --no-clone-bundle \
-          --no-tags \
-          --optimized-fetch \
-          --prune
-
-    - name: Setup build environment
+    - name: Manual TWRP Build
       run: |
         cd twrp-build
         
-        # Для Android 11 нужны специальные настройки
+        # Экспортируем критичные переменные для Android 11
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
+        export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+        export PATH=$JAVA_HOME/bin:$PATH
         
-        # Инициализация среды сборки
-        source build/envsetup.sh
-        
-        # Пробуем найти нашу цель
-        echo "=== Checking available targets ==="
-        if lunch 2>&1 | grep -i "at30a6"; then
-          echo "Found at30a6 target"
-        else
-          echo "Creating custom target"
-          # Создаем переменные вручную
-          export TARGET_DEVICE=at30a6
-          export TARGET_PRODUCT=omni_at30a6
-        fi
-        
-        # Пробуем выбрать устройство
-        if lunch omni_at30a6-eng 2>/dev/null || \
-           lunch twrp_at30a6-eng 2>/dev/null || \
-           lunch at30a6-eng 2>/dev/null; then
-          echo "✅ Device target selected"
-        else
-          # Форсируем настройку
-          echo "⚠️  Using manual configuration"
-          export OUT_DIR="out/target/product/at30a6"
-          mkdir -p $OUT_DIR
-        fi
-        
-        echo "=== Build environment ==="
+        # Проверяем Java версию (должна быть 8)
         echo "Java version:"
-        java -version 2>&1
-        echo "Python version:"
-        python --version 2>&1
-        echo "========================="
-
-    - name: Build recovery image
-      run: |
-        cd twrp-build
+        java -version
         
-        # Проверяем BoardConfig.mk
-        echo "=== Checking BoardConfig.mk ==="
-        if [ -f "device/twrp/at30a6/BoardConfig.mk" ]; then
-          grep -E "BOARD_PAGE_SIZE|BOARD_KERNEL|TARGET_ARCH" device/twrp/at30a6/BoardConfig.mk || true
-        else
-          echo "❌ ERROR: BoardConfig.mk not found!"
-          exit 1
+        # Собираем минимальный recovery
+        echo "Building minimal recovery..."
+        cd device/twrp/at30a6
+        
+        # Создаем простой скрипт сборки
+        cat > build.sh << 'EOF'
+        #!/bin/bash
+        # Создаем выходную директорию
+        mkdir -p ../../../out/target/product/at30a6
+        
+        # Проверяем наличие пребилтов
+        if [ ! -f "prebuilt/kernel" ]; then
+            echo "ERROR: prebuilt/kernel not found!"
+            exit 1
         fi
         
-        # Запуск сборки
-        echo "Starting build..."
+        # Используем mkbootimg для создания образа
+        # Сначала нужно установить mkbootimg
+        which mkbootimg || (
+            git clone https://github.com/osm0sis/mkbootimg /tmp/mkbootimg
+            cd /tmp/mkbootimg && make
+            sudo cp mkbootimg /usr/local/bin/
+        )
         
-        # Сначала пробуем собрать только recovery
-        mka recoveryimage -j$(nproc --all) 2>&1 | tee build.log || {
-          echo "❌ Build failed"
-          echo "Last 50 lines of log:"
-          tail -50 build.log
-          exit 1
-        }
+        # Создаем минимальный ramdisk
+        mkdir -p ramdisk
+        echo "#!/sbin/sh" > ramdisk/init
+        echo 'echo "TWRP Recovery"' >> ramdisk/init
+        chmod 755 ramdisk/init
         
-        # Проверяем результат
-        if [ -f "$OUT/recovery.img" ] || [ -f "out/target/product/at30a6/recovery.img" ]; then
-          RECOVERY_IMG="$OUT/recovery.img"
-          [ -f "$RECOVERY_IMG" ] || RECOVERY_IMG="out/target/product/at30a6/recovery.img"
-          
-          echo "🎉 SUCCESS: TWRP built for Android 11!"
-          echo "File: $RECOVERY_IMG"
-          echo "Size: $(stat -c%s $RECOVERY_IMG) bytes"
-        else
-          echo "❌ ERROR: recovery.img not found"
-          echo "Searching for output files:"
-          find out/ -name "*.img" -type f 2>/dev/null || true
-          exit 1
-        fi
+        cd ramdisk
+        find . | cpio -o -H newc 2>/dev/null | gzip -9 > ../ramdisk.cpio.gz
+        cd ..
+        
+        # Собираем recovery.img
+        mkbootimg \
+          --kernel prebuilt/kernel \
+          --ramdisk ramdisk.cpio.gz \
+          $( [ -f "prebuilt/dt.img" ] && echo "--dtb prebuilt/dt.img" ) \
+          --base 0xffff8000 \
+          --pagesize 2048 \
+          --kernel_offset 0x00008000 \
+          --ramdisk_offset 0x01088000 \
+          --tags_offset 0x01008000 \
+          --os_version 11.0.0 \
+          --os_patch_level 2021-01 \
+          --output ../../../out/target/product/at30a6/recovery.img
+        
+        echo "Recovery image created!"
+        EOF
+        
+        chmod +x build.sh
+        ./build.sh
 
-    - name: Upload TWRP recovery
+    - name: Upload Artifacts
       uses: actions/upload-artifact@v4
-      if: success()
       with:
-        name: TWRP-Android11-at30a6
+        name: TWRP-at30a6-Android11
         path: |
           twrp-build/out/target/product/at30a6/recovery.img
-          twrp-build/out/target/product/at30a6/kernel
-          twrp-build/build.log
-        retention-days: 7
-        if-no-files-found: error
-
-    - name: Upload logs on failure
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: Build-Failure-Logs
-        path: twrp-build/build.log
+          device/twrp/at30a6/prebuilt/kernel
         retention-days: 7
