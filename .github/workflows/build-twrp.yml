@@ -1,130 +1,61 @@
-name: Build TWRP Recovery for Android 11
+name: Build Recovery
 
-on:
-  workflow_dispatch:
+on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
-
+    
     steps:
-    - name: Checkout device tree
-      uses: actions/checkout@v4
-      with:
-        path: device/twrp/at30a6
-
-    - name: Setup environment (Android 11)
+    - uses: actions/checkout@v4
+    
+    - name: Install tools
       run: |
         sudo apt update
-        # ОСНОВНЫЕ зависимости для Android 11
         sudo apt install -y \
-          git-core gnupg flex bison build-essential zip curl zlib1g-dev gcc-multilib g++-multilib \
-          libc6-dev-i386 lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev \
-          libxml2-utils xsltproc unzip fontconfig python2 python3 git-lfs bc lz4 rsync schedtool \
-          squashfs-tools ccache imagemagick libssl-dev
-        # Java 8 ОБЯЗАТЕЛЕН для Android 11
-        sudo apt install -y openjdk-8-jdk
-        # Для repo
-        sudo apt install -y python3-pip
-        pip3 install git-repo
-
-    - name: Initialize TWRP source (CORRECT WAY)
+          mkbootimg \
+          abootimg \
+          cpio \
+          gzip
+        
+    - name: Create recovery image
       run: |
-        # 1. Устанавливаем repo правильно
-        mkdir -p ~/bin
-        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-        chmod a+x ~/bin/repo
-        echo "$HOME/bin" >> $GITHUB_PATH
-        
-        # 2. Клонируем TWRP через TeamWin (официальный источник)
-        git clone https://github.com/TeamWin/android_bootable_recovery.git -b twrp-11
-        git clone https://github.com/TeamWin/android_system_vold.git -b twrp-11
-        
-        # 3. Создаем минимальную структуру для сборки
-        mkdir -p twrp-build
-        cd twrp-build
-        mkdir -p device/twrp/
-        cp -r ../device/twrp/at30a6 device/twrp/
-        
-        # 4. Создаем минимальный Android.mk для сборки
-        cat > Android.mk << 'EOF'
-        include $(call all-subdir-makefiles)
-        EOF
-
-    - name: Manual TWRP Build
-      run: |
-        cd twrp-build
-        
-        # Экспортируем критичные переменные для Android 11
-        export ALLOW_MISSING_DEPENDENCIES=true
-        export LC_ALL=C
-        export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
-        export PATH=$JAVA_HOME/bin:$PATH
-        
-        # Проверяем Java версию (должна быть 8)
-        echo "Java version:"
-        java -version
-        
-        # Собираем минимальный recovery
-        echo "Building minimal recovery..."
-        cd device/twrp/at30a6
-        
-        # Создаем простой скрипт сборки
-        cat > build.sh << 'EOF'
-        #!/bin/bash
-        # Создаем выходную директорию
-        mkdir -p ../../../out/target/product/at30a6
-        
         # Проверяем наличие пребилтов
-        if [ ! -f "prebuilt/kernel" ]; then
-            echo "ERROR: prebuilt/kernel not found!"
-            exit 1
-        fi
-        
-        # Используем mkbootimg для создания образа
-        # Сначала нужно установить mkbootimg
-        which mkbootimg || (
-            git clone https://github.com/osm0sis/mkbootimg /tmp/mkbootimg
-            cd /tmp/mkbootimg && make
-            sudo cp mkbootimg /usr/local/bin/
-        )
+        echo "Checking prebuilt files:"
+        ls -la prebuilt/ || echo "No prebuilt directory"
         
         # Создаем минимальный ramdisk
         mkdir -p ramdisk
-        echo "#!/sbin/sh" > ramdisk/init
-        echo 'echo "TWRP Recovery"' >> ramdisk/init
-        chmod 755 ramdisk/init
+        cat > ramdisk/init.rc << 'EOF'
+        on early-init
+            start ueventd
         
-        cd ramdisk
-        find . | cpio -o -H newc 2>/dev/null | gzip -9 > ../ramdisk.cpio.gz
-        cd ..
-        
-        # Собираем recovery.img
-        mkbootimg \
-          --kernel prebuilt/kernel \
-          --ramdisk ramdisk.cpio.gz \
-          $( [ -f "prebuilt/dt.img" ] && echo "--dtb prebuilt/dt.img" ) \
-          --base 0xffff8000 \
-          --pagesize 2048 \
-          --kernel_offset 0x00008000 \
-          --ramdisk_offset 0x01088000 \
-          --tags_offset 0x01008000 \
-          --os_version 11.0.0 \
-          --os_patch_level 2021-01 \
-          --output ../../../out/target/product/at30a6/recovery.img
-        
-        echo "Recovery image created!"
+        service ueventd /sbin/ueventd
+            class core
+            critical
         EOF
         
-        chmod +x build.sh
-        ./build.sh
-
-    - name: Upload Artifacts
-      uses: actions/upload-artifact@v4
+        # Упаковываем
+        (cd ramdisk && find . | cpio -o -H newc | gzip -9 > ../ramdisk.gz)
+        
+        # Если есть kernel, создаем образ
+        if [ -f "prebuilt/kernel" ]; then
+          mkbootimg \
+            --kernel prebuilt/kernel \
+            --ramdisk ramdisk.gz \
+            --pagesize 2048 \
+            --base 0xffff8000 \
+            --kernel_offset 0x00008000 \
+            --ramdisk_offset 0x01088000 \
+            --output recovery.img
+          
+          echo "✅ Image created: $(ls -lh recovery.img)"
+        else
+          echo "❌ No kernel found"
+        fi
+    
+    - uses: actions/upload-artifact@v4
+      if: success()
       with:
-        name: TWRP-at30a6-Android11
-        path: |
-          twrp-build/out/target/product/at30a6/recovery.img
-          device/twrp/at30a6/prebuilt/kernel
-        retention-days: 7
+        name: recovery
+        path: recovery.img
