@@ -13,95 +13,86 @@ jobs:
     steps:
     - name: Checkout Device Tree
       uses: actions/checkout@v4
-      with:
-        path: local_device_tree
 
     - name: Install Essential Build Tools
       run: |
         sudo apt-get update -y
-        # Установка МИНИМАЛЬНОГО набора для AOSP 13
         sudo apt-get install -y \
           git-core gnupg flex bison build-essential zip \
           curl zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 \
           libncurses5 lib32ncurses5-dev x11proto-core-dev libx11-dev \
           lib32z1-dev liblz4-tool libssl-dev libxml2-utils xsltproc unzip \
           fontconfig python2 python3 repo bc rsync schedtool
-    
-    - name: Prepare TWRP AOSP 13 Source
+
+    - name: Clone and Setup TWRP Source
       run: |
-        # 1. Клонируем TWRP манифест для Android 13
-        mkdir -p twrp_aosp_13
-        cd twrp_aosp_13
-        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-13.0
+        # Клонируем TWRP для Android 13
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-13.0 --depth=1
         
-        # 2. Создаем путь для устройства и копируем tree
-        mkdir -p device/salute
-        cp -r ../local_device_tree device/salute/at30a6
+        # Создаем путь для устройства и копируем файлы
+        mkdir -p device/salute/at30a6
+        cp -r ./* device/salute/at30a6/ 2>/dev/null || true
         
-        # 3. Синхронизируем исходники
+        # Синхронизируем
         repo sync -c -j$(nproc) --no-tags --no-clone-bundle --force-sync
 
-    - name: Fix Android Version in BoardConfig.mk
+    - name: Fix Android Version
       run: |
-        cd twrp_aosp_13/device/salute/at30a6
-        # ИСПРАВЛЯЕМ критическую ошибку: меняем Android 11 на 13
+        cd device/salute/at30a6
         sed -i 's/PLATFORM_VERSION := 11/PLATFORM_VERSION := 13/' BoardConfig.mk
         sed -i 's/PLATFORM_SECURITY_PATCH := 2099-12-31/PLATFORM_SECURITY_PATCH := 2025-01-01/' BoardConfig.mk
-        echo "=== Проверка исправлений ==="
-        grep -n "PLATFORM_VERSION\|PLATFORM_SECURITY_PATCH" BoardConfig.mk
+        echo "Fixed Android version to 13"
 
-    - name: Setup Build Environment
+    - name: Build Recovery
       run: |
-        cd twrp_aosp_13
+        # Настройка окружения
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
-        source build/envsetup.sh
-
-    - name: Build TWRP Recovery
-      run: |
-        cd twrp_aosp_13
-        # Пробуем lunch (должен работать после исправлений)
-        if ! lunch twrp_at30a6-userdebug; then
-          echo "Ошибка lunch, проверяем доступные устройства..."
-          lunch
-          exit 1
-        fi
         
-        # Собираем recovery с подробным логом
-        echo "=== Начало сборки recovery ==="
-        mka recoveryimage 2>&1 | tee build.log
+        source build/envsetup.sh
+        lunch twrp_at30a6-userdebug
+        
+        # Сборка с записью лога
+        mka recoveryimage 2>&1 | tee /tmp/build.log
 
-    - name: Check Build Result
+    - name: Check and Prepare Artifacts
       run: |
-        cd twrp_aosp_13
+        echo "=== Checking build results ==="
+        
+        # Проверяем recovery.img
         if [ -f out/target/product/at30a6/recovery.img ]; then
-          echo "✅ SUCCESS! Recovery image created:"
+          echo "✅ Recovery image found"
           ls -lh out/target/product/at30a6/recovery.img
-          echo "File size: $(stat -c%s out/target/product/at30a6/recovery.img) bytes"
+          
+          # Копируем ключевые файлы в корень для удобной загрузки
+          cp out/target/product/at30a6/recovery.img recovery.img
+          cp /tmp/build.log build.log
+          cp device/salute/at30a6/BoardConfig.mk BoardConfig.mk
         else
-          echo "❌ FAILED! Recovery image not found"
-          echo "Последние 100 строк лога:"
-          tail -100 build.log
+          echo "❌ Recovery image NOT found"
+          echo "Listing out/target/product/at30a6/:"
+          ls -la out/target/product/at30a6/ || true
           exit 1
         fi
 
-    - name: Upload Recovery Image
+    - name: Upload Success Artifacts
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP-at30a6-Android13
+        name: TWRP-Recovery-Build
         path: |
-          twrp_aosp_13/out/target/product/at30a6/recovery.img
-          twrp_aosp_13/build.log
+          recovery.img
+          build.log
+          BoardConfig.mk
         retention-days: 7
 
-    - name: Upload Debug Info on Failure
+    - name: Upload Failure Logs
       if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: Build-Debug-Info
+        name: Build-Failure-Logs
         path: |
-          twrp_aosp_13/build.log
-          twrp_aosp_13/device/salute/at30a6/BoardConfig.mk
-          twrp_aosp_13/device/salute/at30a6/*.mk
+          /tmp/build.log
+          device/salute/at30a6/BoardConfig.mk
+          device/salute/at30a6/*.mk
         retention-days: 30
