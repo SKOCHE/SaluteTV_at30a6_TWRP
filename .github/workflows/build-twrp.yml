@@ -62,6 +62,19 @@ jobs:
         echo "Makefile Name: ${{ github.event.inputs.MAKEFILE_NAME }}"
         echo "Build Target: ${{ github.event.inputs.BUILD_TARGET }}.img"
 
+    - name: Clean disk before sync
+      run: |
+        echo "=== Disk space BEFORE repo sync ==="
+        df -h
+        # Очищаем кэши и временные файлы
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf "/usr/local/share/boost"
+        sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+        sudo apt clean
+        sudo rm -rf /var/lib/apt/lists/*
+        echo "Disk space cleaned"
+
     - name: Checkout device tree
       uses: actions/checkout@v4
       with:
@@ -96,6 +109,43 @@ jobs:
         cd workspace
         repo sync -c -j$(nproc) --no-tags --no-clone-bundle --force-sync
 
+    - name: Clean unnecessary Android directories
+      run: |
+        cd workspace
+        echo "=== Cleaning unnecessary directories to save space ==="
+        # Удаляем НЕ нужные для TWRP директории (сохраняем только essentials)
+        UNNECESSARY_DIRS=(
+          "art"
+          "cts"
+          "developers"
+          "development"
+          "docs"
+          "external"
+          "hardware"
+          "libcore"
+          "libnativehelper"
+          "ndk"
+          "pdk"
+          "platform_testing"
+          "prebuilts"
+          "sdk"
+          "toolchain"
+          "tools"
+          "test"
+          "trusty"
+          "vendor/google"
+        )
+        
+        for dir in "${UNNECESSARY_DIRS[@]}"; do
+          if [ -d "$dir" ]; then
+            echo "Removing $dir/ to save space..."
+            rm -rf "$dir"
+          fi
+        done
+        
+        echo "=== Disk space AFTER cleaning ==="
+        df -h
+
     - name: Fix BoardConfig.mk to avoid mkbootimg.mk error
       run: |
         cd workspace/${{ github.event.inputs.DEVICE_PATH }}
@@ -121,7 +171,7 @@ jobs:
     - name: Set Swap Space
       uses: pierotofy/set-swap-space@master
       with:
-        swap-size-gb: 8
+        swap-size-gb: 4  # Уменьшил с 8 до 4GB
 
     - name: Build recovery
       run: |
