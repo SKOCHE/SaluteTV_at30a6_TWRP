@@ -14,107 +14,46 @@ jobs:
     timeout-minutes: 180
     
     steps:
-    - name: Checkout device tree
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
     
-    - name: Setup environment for Ubuntu 22.04
+    - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y git openjdk-11-jdk ccache python3 \
-          gcc-multilib g++-multilib libc6-dev \
-          libxml2-utils xsltproc bc bison flex curl zip unzip \
-          liblz4-tool libncurses-dev libsdl1.2-dev lzop \
-          pngcrush schedtool squashfs-tools gnupg build-essential \
-          libssl-dev libffi-dev zlib1g-dev
+        sudo apt install -y git openjdk-11-jdk python3 ccache \
+          gcc-multilib g++-multilib libc6-dev libncurses5 \
+          libxml2-utils xsltproc bc bison flex curl lzop \
+          pngcrush schedtool squashfs-tools zip unzip
         
-        # Для 32-битных библиотек в Ubuntu 22.04
-        sudo apt install -y libncurses5:i386 libstdc++6:i386 zlib1g:i386
-        
-    - name: Initialize TWRP 11
+    - name: Install repo
       run: |
-        mkdir twrp
-        cd twrp
-        git config --global user.name "GitHub"
-        git config --global user.email "actions@github.com"
+        mkdir -p ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod +x ~/bin/repo
+        sudo mv ~/bin/repo /usr/local/bin/
+        
+    - name: Get TWRP source
+      run: |
+        mkdir twrp && cd twrp
         repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
-        repo sync -c -j2 --no-tags --no-clone-bundle --force-sync
+        repo sync -c -j2 --no-clone-bundle
         
     - name: Copy device tree
       run: |
         mkdir -p twrp/device/salute/${{ github.event.inputs.device_name }}
+        # Копируем всё кроме .git
+        find . -maxdepth 1 -name "*" ! -name ".git" -exec cp -r {} twrp/device/salute/${{ github.event.inputs.device_name }}/ \;
         
-        # Копируем ВСЕ файлы
-        find . -maxdepth 1 -type f ! -name ".git*" ! -name "*.yml" ! -name "*.yaml" -exec cp {} twrp/device/salute/${{ github.event.inputs.device_name }}/ \;
-        
-        # Копируем директории
-        for dir in device recovery vendor; do
-          if [ -d "$dir" ]; then
-            cp -r "$dir" twrp/device/salute/${{ github.event.inputs.device_name }}/ || true
-          fi
-        done
-        
-        cd twrp/device/salute/${{ github.event.inputs.device_name }}
-        
-        # Создаем recovery.fstab если нужно
-        if [ ! -f "recovery.fstab" ]; then
-          if [ -f "recovery/root/system/etc/twrp.flags" ]; then
-            cp recovery/root/system/etc/twrp.flags recovery.fstab
-            echo "Created recovery.fstab from twrp.flags"
-          elif [ -f "fstab.amlogic" ]; then
-            cp fstab.amlogic recovery.fstab
-            echo "Created recovery.fstab from fstab.amlogic"
-          fi
-        fi
-        
-        echo "Files in device directory:"
-        ls -la
-        
-    - name: Create missing Makefiles
-      run: |
-        cd twrp/device/salute/${{ github.event.inputs.device_name }}
-        DEVICE="${{ github.event.inputs.device_name }}"
-        
-        if [ ! -f "AndroidProducts.mk" ]; then
-          echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/twrp_${DEVICE}.mk" > AndroidProducts.mk
-        fi
-        
-        if [ ! -f "twrp_${DEVICE}.mk" ]; then
-          echo '$(call inherit-product, $(SRC_TARGET_DIR)/product/base.mk)' > twrp_${DEVICE}.mk
-          echo '' >> twrp_${DEVICE}.mk
-          echo "PRODUCT_DEVICE := ${DEVICE}" >> twrp_${DEVICE}.mk
-          echo "PRODUCT_NAME := twrp_${DEVICE}" >> twrp_${DEVICE}.mk
-          echo 'PRODUCT_BRAND := SaluteTV' >> twrp_${DEVICE}.mk
-          echo 'PRODUCT_MODEL := AT30A6' >> twrp_${DEVICE}.mk
-          echo 'PRODUCT_MANUFACTURER := SaluteTV' >> twrp_${DEVICE}.mk
-        fi
-        
-    - name: Build TWRP
+    - name: Build
       run: |
         cd twrp
-        
         export ALLOW_MISSING_DEPENDENCIES=true
-        export LC_ALL=C
-        
         source build/envsetup.sh
+        lunch twrp_${{ github.event.inputs.device_name }}-eng || lunch omni_${{ github.event.inputs.device_name }}-eng
+        make recoveryimage -j2
         
-        # Пробуем собрать
-        if lunch twrp_${{ github.event.inputs.device_name }}-eng; then
-          make clean
-          make recoveryimage -j2
-        elif lunch omni_${{ github.event.inputs.device_name }}-eng; then
-          make clean
-          make recoveryimage -j2
-        else
-          echo "Failed to lunch. Trying direct build..."
-          export TARGET_DEVICE=${{ github.event.inputs.device_name }}
-          export TARGET_PRODUCT=twrp_${{ github.event.inputs.device_name }}
-          make clean
-          make recoveryimage -j2
-        fi
-        
-    - name: Upload recovery image
+    - name: Upload
       uses: actions/upload-artifact@v4
       if: success()
       with:
-        name: twrp-recovery
+        name: recovery
         path: twrp/out/target/product/${{ github.event.inputs.device_name }}/recovery.img
