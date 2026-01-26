@@ -1,61 +1,81 @@
-name: Build TWRP
+name: Build TWRP Recovery
 
 on:
   workflow_dispatch:
     inputs:
-      device_name:
+      device_codename:
         description: 'Device codename'
         required: true
         default: 'at30a6'
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     timeout-minutes: 180
-    
+
     steps:
-    - uses: actions/checkout@v4
-    
+    # Шаг 1: Установка зависимостей
     - name: Install dependencies
       run: |
         sudo apt update
         sudo apt install -y git openjdk-17-jdk ccache python3 \
           gcc-multilib g++-multilib libc6-dev libncurses5 \
           libxml2-utils xsltproc bc bison flex curl lzop \
-          pngcrush squashfs-tools zip unzip repo
+          pngcrush squashfs-tools zip unzip
         
-    - name: Get TWRP source
+    # Шаг 2: Установка repo (минимальная версия)
+    - name: Install repo tool
       run: |
-        mkdir twrp && cd twrp
-        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1
-        repo sync -c -j2
-        
-    - name: Copy device tree
+        curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
+        chmod a+x ~/repo
+        sudo mv ~/repo /usr/local/bin/
+
+    # Шаг 3: Инициализация с минимальной глубиной
+    - name: Initialize TWRP source
       run: |
-        mkdir -p twrp/device/salute/${{ github.event.inputs.device_name }}
-        # Копируем файлы дерева устройства
-        cp -r *.mk recovery.fstab recovery/ prebuilt/ twrp/device/salute/${{ github.event.inputs.device_name }}/ 2>/dev/null || true
-        
-    - name: Fix libbinder error
+        mkdir twrp
+        cd twrp
+        # Используем минимальную глубину и ветку 12.1
+        /usr/local/bin/repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
+          -b twrp-12.1 \
+          --depth=1 \
+          --groups=all,-notdefault,-device,-mips
+
+    # Шаг 4: Синхронизация только необходимого
+    - name: Sync source (minimal)
       run: |
         cd twrp
-        # Исправляем проблему с version_script в libbinder
-        sed -i '/version_script: "libbinder.map.txt"/d' frameworks/native/libs/binder/Android.bp 2>/dev/null || true
-        # Альтернативное исправление
-        sed -i 's/version_script: "libbinder.map.txt",/# version_script: "libbinder.map.txt",/' frameworks/native/libs/binder/Android.bp 2>/dev/null || true
-        
-    - name: Build
+        # Синхронизируем только основные компоненты
+        /usr/local/bin/repo sync -c -j2 \
+          --no-tags \
+          --no-clone-bundle \
+          --current-branch \
+          --optimized-fetch \
+          --force-sync \
+          --fetch-submodules \
+          build/make bionic system/core bootable/recovery
+
+    # Шаг 5: Копирование дерева устройства
+    - name: Copy device tree
+      run: |
+        mkdir -p twrp/device/salute/${{ github.event.inputs.device_codename }}
+        # Копируем только нужные файлы
+        cp -r *.mk *.txt recovery.fstab recovery/ prebuilt/ twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
+
+    # Шаг 6: Быстрая сборка
+    - name: Build recovery
       run: |
         cd twrp
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
         source build/envsetup.sh
-        lunch twrp_${{ github.event.inputs.device_name }}-eng
-        make recoveryimage -j$(nproc --all)
-        
-    - name: Upload recovery
-      uses: actions/upload-artifact@v4
+        lunch twrp_${{ github.event.inputs.device_codename }}-eng
+        make recoveryimage -j2
+
+    # Шаг 7: Загрузка артефакта
+    - name: Upload recovery image
       if: success()
+      uses: actions/upload-artifact@v4
       with:
-        name: twrp-recovery
-        path: twrp/out/target/product/${{ github.event.inputs.device_name }}/recovery.img
+        name: recovery-${{ github.event.inputs.device_codename }}
+        path: twrp/out/target/product/${{ github.event.inputs.device_codename }}/recovery.img
