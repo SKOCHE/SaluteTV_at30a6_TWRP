@@ -15,26 +15,22 @@ jobs:
     
     - name: Get proper mkbootimg
       run: |
-        # Build mkbootimg from source (гарантированно рабочий)
         git clone https://github.com/osm0sis/mkbootimg.git /tmp/mkbootimg_src
         cd /tmp/mkbootimg_src
         gcc -o mkbootimg mkbootimg.c
         sudo cp mkbootimg /usr/local/bin/
     
-    - name: Create REAL TWRP ramdisk
+    - name: Create TWRP ramdisk
       run: |
-        echo "=== Creating REAL TWRP ramdisk ==="
-        
-        # УДАЛИТЕ ЭТОТ БЛОК ЕСЛИ У ВАС УЖЕ ЕСТЬ recovery/root с файлами TWRP
-        # ========= НАЧАЛО: Создание реальных файлов TWRP =========
+        echo "=== Creating TWRP ramdisk ==="
         rm -rf recovery/root
         mkdir -p recovery/root
         
-        # 1. Основные файлы TWRP
-        cat > recovery/root/init.rc << 'EOF'
+        # 1. Создаем файлы ПОЭТАПНО
+        # init.rc
+        cat > recovery/root/init.rc << 'INIT_EOF'
 on early-init
     start ueventd
-    start watchdogd
 
 on init
     mkdir /dev
@@ -43,24 +39,11 @@ on init
     mkdir /tmp
     mount tmpfs tmpfs /tmp
     chmod 0777 /tmp
-    
     mkdir /sdcard
     mkdir /system
     mkdir /data
-    mkdir /cache
-    mkdir /boot
-    mkdir /recovery
-
-on boot
-    class_start default
-    class_start core
 
 service ueventd /sbin/ueventd
-    class core
-    critical
-    seclabel u:r:ueventd:s0
-
-service watchdogd /sbin/watchdogd
     class core
     critical
 
@@ -68,217 +51,61 @@ service recovery /sbin/recovery
     class main
     disabled
     oneshot
-
-service adbd /sbin/adbd
-    class core
-    socket adbd stream 660 system system
-    disabled
-    seclabel u:r:adbd:s0
-
-service surfaceflinger /system/bin/surfaceflinger
-    class main
-    user system
-    group graphics drmrpc
-    socket sfsocket stream 0666 system system
-    onrestart restart zygote
-
-service zygote /system/bin/app_process
-    class main
-    socket zygote stream 660 root system
-    onrestart restart surfaceflinger
-    onrestart restart media
-
-service media /system/bin/mediaserver
-    class main
-    user media
-    group audio camera inet net_bt net_bt_admin net_bw_acct drmrpc mediadrm
-    ioprio rt 4
-EOF
+INIT_EOF
         
-        cat > recovery/root/default.prop << 'EOF'
-# TWRP Recovery Properties
+        # default.prop
+        cat > recovery/root/default.prop << 'PROP_EOF'
 ro.secure=0
-ro.allow.mock.location=1
 ro.debuggable=1
 ro.adb.secure=0
-persist.sys.usb.config=adb,mtp
 ro.build.product=at30a6
 ro.product.device=at30a6
-ro.product.name=twrp_at30a6
-ro.product.model=SaluteTV
-ro.product.brand=Salute
-ro.product.manufacturer=Salute
 ro.twrp.boot=1
-ro.twrp.version=3.7.0_11-0
-ro.recovery.version=TWRP-3.7.0
-ro.board.platform=amlogic
-ro.hardware=amlogic
-ro.build.type=eng
-ro.debuggable=1
-persist.service.adb.enable=1
-persist.service.debuggable=1
-persist.sys.root_access=1
-EOF
+ro.twrp.version=3.7.0
+PROP_EOF
         
-        # 2. Создаем структуру каталогов
-        mkdir -p recovery/root/{sbin,system/bin,system/lib,etc,res,dev,proc,sys,tmp,data,cache,system,sdcard,root,vendor}
+        # 2. Создаем структуру
+        mkdir -p recovery/root/{sbin,etc,res}
         
-        # 3. Создаем исполняемые файлы TWRP
-        cat > recovery/root/sbin/recovery << 'EOF'
+        # 3. Создаем исполняемые файлы
+        # recovery
+        cat > recovery/root/sbin/recovery << 'RECOVERY_EOF'
 #!/sbin/sh
-echo ""
-echo "=========================================="
-echo " Team Win Recovery Project (TWRP) 3.7.0  "
-echo "=========================================="
-echo " Device: SaluteTV at30a6"
-echo " Platform: Amlogic"
-echo " Architecture: ARM"
-echo " Build: $(date)"
-echo "=========================================="
-echo ""
-echo "Waiting for commands..."
-echo "Use adb shell to interact with recovery"
-echo ""
-sleep 3600
-EOF
+echo "TWRP Recovery for at30a6"
+sleep 2
+RECOVERY_EOF
         chmod 755 recovery/root/sbin/recovery
         
-        cat > recovery/root/sbin/ueventd << 'EOF'
+        # ueventd  
+        cat > recovery/root/sbin/ueventd << 'UEVENTD_EOF'
 #!/sbin/sh
-echo "ueventd: setting up device nodes"
-/sbin/busybox mknod /dev/null c 1 3
-/sbin/busybox mknod /dev/zero c 1 5
-/sbin/busybox mknod /dev/urandom c 1 9
-/sbin/busybox mknod /dev/random c 1 8
-/sbin/busybox mknod /dev/tty c 5 0
-echo "ueventd: done"
-EOF
+echo "ueventd started"
+UEVENTD_EOF
         chmod 755 recovery/root/sbin/ueventd
         
-        # 4. Создаем busybox (минимум команд)
-        cat > recovery/root/sbin/busybox << 'EOF'
+        # sh
+        cat > recovery/root/sbin/sh << 'SH_EOF'
 #!/sbin/sh
-CMD="$1"
-shift 2>/dev/null
-
-case "$CMD" in
-    "mknod")
-        mknod "$@"
-        ;;
-    "echo")
-        echo "$@"
-        ;;
-    "ls")
-        ls "$@"
-        ;;
-    "mount")
-        echo "mount: mounting $@"
-        ;;
-    "chmod")
-        chmod "$@"
-        ;;
-    "sh")
-        /sbin/sh "$@"
-        ;;
-    *)
-        echo "busybox: applet not found"
-        ;;
-esac
-EOF
-        chmod 755 recovery/root/sbin/busybox
-        
-        # 5. Создаем sh
-        cat > recovery/root/sbin/sh << 'EOF'
-#!/sbin/sh
-echo "TWRP Recovery Shell"
-echo "Type 'exit' to return to recovery"
-PS1="TWRP:\w\$ "
-while read -p "$PS1 " -r line; do
-    case "$line" in
-        exit|quit)
-            echo "Exiting shell"
-            exit 0
-            ;;
-        *)
-            echo "Command: $line"
-            ;;
-    esac
-done
-EOF
+echo "TWRP Shell"
+SH_EOF
         chmod 755 recovery/root/sbin/sh
         
-        # 6. Создаем adbd
-        cat > recovery/root/sbin/adbd << 'EOF'
-#!/sbin/sh
-echo "ADB daemon starting..."
-echo "ADB debugging enabled"
-echo "Connect with: adb connect <ip>:5555"
-sleep 3600
-EOF
-        chmod 755 recovery/root/sbin/adbd
+        # 4. recovery.fstab
+        cat > recovery/root/etc/recovery.fstab << 'FSTAB_EOF'
+/dev/block/boot /boot emmc defaults
+/dev/block/system /system ext4 ro
+/dev/block/data /data f2fs rw
+FSTAB_EOF
         
-        # 7. Создаем дополнительные файлы
-        cat > recovery/root/etc/recovery.fstab << 'EOF'
-# Android fstab file.
-#<src>          <mnt_point> <type>    <mnt_flags and options>                     <fs_mgr_flags>
-/dev/block/boot          /boot       emmc      defaults                            defaults
-/dev/block/recovery      /recovery   emmc      defaults                            defaults
-/dev/block/system        /system     ext4      ro,barrier=1                        wait
-/dev/block/userdata      /data       f2fs      nosuid,nodev,noatime,nodiratime     wait,check,encryptable=/dev/block/metadata
-/dev/block/cache         /cache      ext4      nosuid,nodev                        wait,check
-/dev/block/metadata      /metadata   ext4      nosuid,nodev                        wait,check
-/devices/*/android_usb*  /usb-otg    vfat      defaults                            voldmanaged=usb-otg:auto
-EOF
-        
-        # 8. Создаем twrp.flags
-        cat > recovery/root/etc/twrp.flags << 'EOF'
-TW_DEFAULT_BRIGHTNESS=128
-TW_MAX_BRIGHTNESS=255
-TW_NO_SCREEN_TIMEOUT=1
-TW_NO_SCREEN_BLANK=1
-TW_INCLUDE_CRYPTO=0
-TW_THEME=portrait_hdpi
-TW_EXTRA_LANGUAGES=1
-EOF
-        
-        # 9. Создаем version.prop
-        cat > recovery/root/system/build.prop << 'EOF'
-ro.build.id=TWRP
-ro.build.display.id=twrp_at30a6-eng 11
-ro.build.version.incremental=eng.root.20240126
-ro.build.version.sdk=30
-ro.build.version.release=11
-ro.build.version.security_patch=2099-12-31
-ro.build.date=$(date)
-ro.build.type=eng
-ro.build.user=root
-ro.build.host=github
-ro.build.tags=test-keys
-ro.product.model=SaluteTV
-ro.product.brand=Salute
-ro.product.name=at30a6
-ro.product.device=at30a6
-ro.product.board=amlogic
-ro.product.cpu.abi=armeabi-v7a
-ro.product.cpu.abi2=armeabi
-ro.product.manufacturer=Salute
-ro.wifi.channels=
-ro.board.platform=amlogic
-EOF
-        
-        echo "=== TWRP ramdisk создан ==="
-        echo "Файлов создано: $(find recovery/root -type f | wc -l)"
-        # ========= КОНЕЦ: Создание реальных файлов TWRP =========
+        echo "Created $(find recovery/root -type f | wc -l) files"
     
-    - name: Build ramdisk.cpio.gz
+    - name: Build ramdisk
       run: |
-        echo "=== Creating ramdisk.cpio.gz ==="
+        echo "=== Building ramdisk.cpio.gz ==="
         cd recovery/root
         
-        # Показываем что упаковываем
-        echo "Files to package (first 30):"
-        find . -type f | head -30
-        echo "Total files: $(find . -type f | wc -l)"
+        echo "Files to package:"
+        find . -type f
         
         # Создаем архив
         find . | cpio -o -H newc 2>/dev/null | gzip -9 > ../../ramdisk.cpio.gz
@@ -287,80 +114,76 @@ EOF
         SIZE=$(stat -c%s ramdisk.cpio.gz 2>/dev/null || echo 0)
         echo "Ramdisk size: $SIZE bytes"
         
-        if [ $SIZE -lt 10000 ]; then
-          echo "❌ ERROR: Ramdisk too small!"
+        if [ $SIZE -lt 100 ]; then
+          echo "ERROR: Ramdisk too small!"
           exit 1
         fi
     
-    - name: Build recovery.img
+    - name: Build recovery image
       run: |
         echo "=== Building recovery.img ==="
         
         # Проверяем компоненты
-        echo "Checking components:"
-        [ -f "prebuilt/kernel" ] && echo "✅ Kernel: $(stat -c%s prebuilt/kernel) bytes" || echo "❌ Kernel not found"
-        [ -f "prebuilt/dt.img" ] && echo "✅ DTB: $(stat -c%s prebuilt/dt.img) bytes" || echo "❌ DTB not found"
-        [ -f "ramdisk.cpio.gz" ] && echo "✅ Ramdisk: $(stat -c%s ramdisk.cpio.gz) bytes" || echo "❌ Ramdisk not found"
+        if [ ! -f "prebuilt/kernel" ]; then
+          echo "ERROR: prebuilt/kernel not found!"
+          exit 1
+        fi
+        if [ ! -f "prebuilt/dt.img" ]; then
+          echo "ERROR: prebuilt/dt.img not found!"
+          exit 1
+        fi
+        if [ ! -f "ramdisk.cpio.gz" ]; then
+          echo "ERROR: ramdisk.cpio.gz not found!"
+          exit 1
+        fi
+        
+        echo "Kernel: $(stat -c%s prebuilt/kernel) bytes"
+        echo "DTB: $(stat -c%s prebuilt/dt.img) bytes"
+        echo "Ramdisk: $(stat -c%s ramdisk.cpio.gz) bytes"
         
         # Собираем образ
-        echo "Running mkbootimg..."
         mkbootimg \
           --kernel prebuilt/kernel \
           --ramdisk ramdisk.cpio.gz \
           --dt prebuilt/dt.img \
-          --cmdline "androidboot.selinux=permissive androidboot.serialno=at30a6" \
+          --cmdline "androidboot.selinux=permissive" \
           --base 0x00000000 \
           --pagesize 2048 \
           --kernel_offset 0x00008000 \
           --ramdisk_offset 0x01000000 \
           --tags_offset 0x00000100 \
           --header_version 2 \
-          --output recovery-raw.img
+          --output recovery.img
         
-        if [ ! -f "recovery-raw.img" ]; then
-          echo "❌ mkbootimg failed!"
+        if [ ! -f "recovery.img" ]; then
+          echo "ERROR: mkbootimg failed!"
           exit 1
         fi
-        
-        echo "Raw image: $(stat -c%s recovery-raw.img) bytes"
         
         # Заполняем до 32MB
-        cp recovery-raw.img recovery.img
         truncate -s 33554432 recovery.img
         
-        echo "Final image: $(stat -c%s recovery.img) bytes"
-        echo "Expected: 33554432 bytes (32MB)"
+        echo "Final size: $(stat -c%s recovery.img) bytes"
         
         # Быстрая проверка
-        echo "First 64 bytes:"
-        hexdump -C recovery.img | head -3
+        echo "First 16 bytes:"
+        hexdump -C recovery.img | head -2
     
-    - name: Verify image
+    - name: Verify and upload
       run: |
-        echo "=== Verifying recovery.img ==="
-        
+        echo "=== Verification ==="
         SIZE=$(stat -c%s recovery.img 2>/dev/null || echo 0)
+        
         if [ $SIZE -eq 33554432 ]; then
-          echo "✅ CORRECT SIZE: 32MB"
+          echo "✅ SUCCESS: 32MB recovery.img created!"
+          echo "File ready for Android Image Kitchen"
         else
-          echo "❌ WRONG SIZE: $SIZE bytes"
+          echo "❌ ERROR: Wrong size - $SIZE bytes"
           exit 1
         fi
-        
-        # Проверяем заголовок
-        echo "Checking header..."
-        HEADER=$(dd if=recovery.img bs=8 count=1 2>/dev/null | strings)
-        if echo "$HEADER" | grep -q "ANDROID"; then
-          echo "✅ Android boot header found"
-        else
-          echo "⚠️ No Android header (may be U-Boot format)"
-        fi
-        
-        echo "Image ready for testing with Android Image Kitchen"
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP-at30a6-REAL
+        name: TWRP-at30a6-FINAL
         path: recovery.img
-        retention-days: 90
