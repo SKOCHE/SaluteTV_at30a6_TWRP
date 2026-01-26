@@ -1,143 +1,139 @@
-name: Recovery Build
+name: Build TWRP
 
 on:
   workflow_dispatch:
     inputs:
-      DEVICE_NAME:
-        description: 'DEVICE_NAME'
+      device_name:
+        description: 'Device codename'
         required: true
         default: 'at30a6'
-      MAKEFILE_NAME:
-        description: 'MAKEFILE_NAME'
-        required: true
-        default: 'twrp_at30a6'
 
 jobs:
   build:
-    if: github.event.repository.owner.id == github.event.sender.id
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     timeout-minutes: 180
-    permissions:
-      contents: write
-      
+    
     steps:
-    - name: Check Out Device Tree
+    - name: Checkout device tree
       uses: actions/checkout@v4
-      with:
-        path: device_tree
-
-    - name: Cleanup Workspace
-      uses: rokibhasansagar/slimhub_actions@main
-
-    - name: Install Dependencies
+    
+    - name: Setup environment
       run: |
         sudo apt update
-        sudo apt install -y gperf gcc-multilib g++-multilib libc6-dev \
-          lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z-dev \
-          libgl1-mesa-dev libxml2-utils xsltproc bc ccache lib32readline-dev \
-          lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev \
-          libwxgtk3.0-gtk3-dev lzop pngcrush schedtool squashfs-tools python3 \
-          git-core gnupg flex bison build-essential zip curl zlib1g-dev
-
-    - name: Install OpenJDK 17
-      uses: actions/setup-java@v3
-      with:
-        distribution: 'temurin'
-        java-version: '17'
-
-    - name: Install repo tool
+        sudo apt install -y git openjdk-11-jdk ccache python3 \
+          gcc-multilib g++-multilib libc6-dev lib32ncurses5-dev \
+          libxml2-utils xsltproc bc bison flex curl zip unzip \
+          liblz4-tool libncurses5-dev libsdl1.2-dev lzop \
+          pngcrush schedtool squashfs-tools gnupg build-essential
+    
+    - name: Initialize TWRP 11
       run: |
-        mkdir -p ~/bin
-        curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-        chmod a+x ~/bin/repo
-        sudo cp ~/bin/repo /usr/bin/repo
-
-    - name: Initialize TWRP Source
-      run: |
-        mkdir -p twrp_build
-        cd twrp_build
-        git config --global user.name "GitHub Actions"
+        mkdir twrp
+        cd twrp
+        git config --global user.name "GitHub"
         git config --global user.email "actions@github.com"
-        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp -b twrp-12.1
-
-    - name: Sync Source Code
-      run: |
-        cd twrp_build
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
         repo sync -c -j2 --no-tags --no-clone-bundle --force-sync
-
-    - name: Copy Device Tree
+        
+    - name: Copy device tree
       run: |
-        echo "=== Копирование дерева устройства ==="
+        mkdir -p twrp/device/salute/${{ github.event.inputs.device_name }}
         
-        # Создаем чистую директорию для устройства
-        rm -rf twrp_build/device/salute/at30a6 2>/dev/null || true
-        mkdir -p twrp_build/device/salute/at30a6
+        # Копируем ВСЕ файлы из репозитория
+        find . -maxdepth 1 -type f -name "*.mk" -o -name "*.xml" -o -name "Android*" | xargs -I {} cp {} twrp/device/salute/${{ github.event.inputs.device_name }}/ 2>/dev/null || true
         
-        # Копируем всё из device_tree
-        cp -r device_tree/* twrp_build/device/salute/at30a6/
+        # Копируем директории
+        if [ -d "device" ]; then
+          cp -r device/* twrp/device/salute/${{ github.event.inputs.device_name }}/ 2>/dev/null || true
+        fi
         
-        cd twrp_build/device/salute/at30a6
-        echo "=== Содержимое ==="
-        ls -la
+        if [ -d "recovery" ]; then
+          cp -r recovery twrp/device/salute/${{ github.event.inputs.device_name }}/ 2>/dev/null || true
+        fi
         
-        # Создаем recovery.fstab если нужно (без heredoc!)
+        if [ -d "vendor" ]; then
+          cp -r vendor twrp/device/salute/${{ github.event.inputs.device_name }}/ 2>/dev/null || true
+        fi
+        
+        cd twrp/device/salute/${{ github.event.inputs.device_name }}
+        
+        # Создаем recovery.fstab если нужно
         if [ ! -f "recovery.fstab" ]; then
           if [ -f "recovery/root/system/etc/twrp.flags" ]; then
             cp recovery/root/system/etc/twrp.flags recovery.fstab
+            echo "Created recovery.fstab from twrp.flags"
           elif [ -f "fstab.amlogic" ]; then
             cp fstab.amlogic recovery.fstab
+            echo "Created recovery.fstab from fstab.amlogic"
+          else
+            # Минимальный fstab
+            echo "/dev/block/by-name/system /system ext4 ro" > recovery.fstab
+            echo "/dev/block/by-name/userdata /data ext4 rw" >> recovery.fstab
+            echo "Created minimal recovery.fstab"
           fi
         fi
         
-        # Создаем twrp_at30a6.mk если его нет (без heredoc!)
-        if [ ! -f "twrp_at30a6.mk" ]; then
-          echo '$(call inherit-product, device/salute/at30a6/device.mk)' > twrp_at30a6.mk
-          echo '$(call inherit-product, vendor/twrp/config/common.mk)' >> twrp_at30a6.mk
-          echo '' >> twrp_at30a6.mk
-          echo 'PRODUCT_DEVICE := at30a6' >> twrp_at30a6.mk
-          echo 'PRODUCT_NAME := twrp_at30a6' >> twrp_at30a6.mk
-          echo 'PRODUCT_BRAND := SaluteTV' >> twrp_at30a6.mk
-          echo 'PRODUCT_MODEL := AT30A6' >> twrp_at30a6.mk
-          echo 'PRODUCT_MANUFACTURER := SaluteTV' >> twrp_at30a6.mk
+        # Проверяем необходимые файлы
+        echo "Files in device directory:"
+        ls -la
+        
+    - name: Create missing Makefiles
+      run: |
+        cd twrp/device/salute/${{ github.event.inputs.device_name }}
+        
+        # Если нет AndroidProducts.mk
+        if [ ! -f "AndroidProducts.mk" ]; then
+          echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/twrp_${{ github.event.inputs.device_name }}.mk" > AndroidProducts.mk
+          echo "Created AndroidProducts.mk"
         fi
         
-        # Создаем AndroidProducts.mk
-        echo 'PRODUCT_MAKEFILES := $(LOCAL_DIR)/twrp_at30a6.mk' > AndroidProducts.mk
+        # Если нет twrp_<device>.mk
+        if [ ! -f "twrp_${{ github.event.inputs.device_name }}.mk" ]; then
+          cat > twrp_${{ github.event.inputs.device_name }}.mk << 'MKEOF'
+$(call inherit-product, $(SRC_TARGET_DIR)/product/base.mk)
 
-    - name: Set Swap Space
-      uses: pierotofy/set-swap-space@master
-      with:
-        swap-size-gb: 12
-
-    - name: Build Recovery
+PRODUCT_DEVICE := ${{ github.event.inputs.device_name }}
+PRODUCT_NAME := twrp_${{ github.event.inputs.device_name }}
+PRODUCT_BRAND := SaluteTV
+PRODUCT_MODEL := AT30A6
+PRODUCT_MANUFACTURER := SaluteTV
+MKEOF
+          echo "Created twrp_${{ github.event.inputs.device_name }}.mk"
+        fi
+        
+    - name: Build TWRP
       run: |
-        cd twrp_build
+        cd twrp
+        
+        # Экспортируем переменные
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
         
-        echo "=== Начало сборки ==="
+        # Инициализация
         source build/envsetup.sh
-        lunch twrp_at30a6-eng
+        
+        # Пробуем разные варианты lunch
+        lunch omni_${{ github.event.inputs.device_name }}-eng 2>/dev/null || \
+        lunch twrp_${{ github.event.inputs.device_name }}-eng 2>/dev/null || \
+        lunch lineage_${{ github.event.inputs.device_name }}-eng
+        
+        # Сборка
         make clean
-        echo "=== Компиляция recoveryimage ==="
-        make recoveryimage -j2
-
-    - name: Upload Recovery Image
+        make recoveryimage -j$(nproc --all)
+        
+    - name: Upload recovery image
       uses: actions/upload-artifact@v4
       if: success()
       with:
-        name: recovery-at30a6
-        path: twrp_build/out/target/product/at30a6/recovery.img
-
-    - name: Create Release
+        name: twrp-recovery-${{ github.event.inputs.device_name }}
+        path: twrp/out/target/product/${{ github.event.inputs.device_name }}/recovery.img
+        
+    - name: Create release
       uses: softprops/action-gh-release@v1
       if: success()
-      with:
-        files: twrp_build/out/target/product/at30a6/recovery.img
-        name: "TWRP at30a6"
-        tag_name: "build-${{ github.run_number }}"
-        body: |
-          TWRP Recovery for SaluteTV at30a6
-          Built: $(date)
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: twrp-${{ github.event.inputs.device_name }}-${{ github.run_number }}
+        name: "TWRP ${{ github.event.inputs.device_name }}"
+        files: twrp/out/target/product/${{ github.event.inputs.device_name }}/recovery.img
