@@ -16,7 +16,7 @@ jobs:
   build:
     if: github.event.repository.owner.id == github.event.sender.id
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     permissions:
       contents: write
       
@@ -35,7 +35,7 @@ jobs:
           libgl1-mesa-dev libxml2-utils xsltproc bc ccache lib32readline-dev \
           lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev \
           libwxgtk3.0-gtk3-dev lzop pngcrush schedtool squashfs-tools python3 \
-          git-core gnupg flex bison build-essential zip curl zlib1g-dev
+          git-core gnupg flex bison build-essential zip curl zlib1g-dev rsync
 
     - name: Install OpenJDK 17
       uses: actions/setup-java@v3
@@ -65,15 +65,44 @@ jobs:
 
     - name: Copy Device Tree
       run: |
-        # Копируем только файлы дерева устройства, исключая workspace
+        echo "=== Копирование дерева устройства ==="
+        # Полностью копируем репозиторий в устройство
         mkdir -p twrp_build/device/salute/at30a6
-        find . -maxdepth 1 -type f -name "*.mk" -o -name "*.xml" -o -name "Android*" -o -name "*Board*" | xargs -I {} cp {} twrp_build/device/salute/at30a6/ || true
-        if [ -d device ]; then
-          cp -r device/* twrp_build/device/salute/at30a6/ || true
+        
+        # Используем rsync для надёжного копирования
+        rsync -av --progress \
+          --exclude='.git' \
+          --exclude='twrp_build' \
+          --exclude='*.yml' \
+          --exclude='*.yaml' \
+          ./ twrp_build/device/salute/at30a6/
+        
+        # Проверяем, что скопировалось
+        cd twrp_build/device/salute/at30a6
+        echo "=== Содержимое директории устройства ==="
+        ls -la
+        
+        # Если нет recovery.fstab, создаем из twrp.flags
+        if [ ! -f "recovery.fstab" ]; then
+          echo "=== Создание recovery.fstab ==="
+          if [ -f "recovery/root/system/etc/twrp.flags" ]; then
+            echo "Создаю recovery.fstab из twrp.flags"
+            cp recovery/root/system/etc/twrp.flags recovery.fstab
+          elif [ -f "fstab.amlogic" ]; then
+            echo "Создаю recovery.fstab из fstab.amlogic"
+            cp fstab.amlogic recovery.fstab
+          else
+            echo "Создаю минимальный recovery.fstab"
+            cat > recovery.fstab << 'EOF'
+/dev/block/by-name/system     /system     ext4    ro,barrier=1    wait,slotselect
+/dev/block/by-name/userdata   /data       ext4    nosuid,nodev,noatime    wait,check,formattable
+/dev/block/by-name/cache      /cache      ext4    nosuid,nodev,noatime    wait,check
+EOF
+          fi
         fi
-        if [ -d recovery ]; then
-          cp -r recovery twrp_build/device/salute/at30a6/ || true
-        fi
+        
+        echo "=== Проверка необходимых файлов ==="
+        ls -la *.mk recovery.fstab 2>/dev/null || echo "Некоторые файлы отсутствуют"
 
     - name: Set Swap Space
       uses: pierotofy/set-swap-space@master
@@ -86,9 +115,11 @@ jobs:
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
         
+        echo "=== Начало сборки ==="
         source build/envsetup.sh
         lunch twrp_at30a6-eng
         make clean
+        echo "=== Компиляция recoveryimage ==="
         make recoveryimage -j2
 
     - name: Upload Recovery Image
