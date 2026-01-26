@@ -1,4 +1,4 @@
-name: Build TWRP Recovery
+name: Build TWRP
 
 on:
   workflow_dispatch:
@@ -11,101 +11,69 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 120
 
     steps:
-    - name: Clean disk space
+    - name: Clean disk
       run: |
-        df -h
         sudo apt clean
-        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /var/lib/apt/lists/*
-        sudo rm -rf /usr/local/lib/android /usr/local/lib/node_modules
-        df -h
+        sudo rm -rf /usr/share/dotnet
 
     - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y git openjdk-17-jdk python3 ccache
+        sudo apt install -y git openjdk-17-jdk python3
         sudo apt install -y gcc-multilib g++-multilib libc6-dev
         sudo apt install -y libxml2-utils xsltproc bc bison flex curl
 
-    - name: Download minimal TWRP source
+    - name: Download source
       run: |
         mkdir twrp
         cd twrp
         
-        echo "Downloading minimal sources..."
+        echo "Downloading sources..."
         
         # Build system
         git clone https://github.com/LineageOS/android_build.git build/make -b lineage-20.0 --depth=1
         
-        # Recovery
-        git clone https://github.com/TeamWin/android_bootable_recovery.git bootable/recovery -b twrp-12.1 --depth=1
+        # Recovery - пробуем разные ветки
+        git clone https://github.com/TeamWin/android_bootable_recovery.git bootable/recovery --depth=1
+        cd bootable/recovery
+        # Пробуем переключиться на существующую ветку
+        git checkout android-12.1 2>/dev/null || git checkout android-12 2>/dev/null || git checkout twrp-11 2>/dev/null || echo "Using default branch"
+        cd ../..
         
         # System core
         git clone https://github.com/LineageOS/android_system_core.git system/core -b lineage-20.0 --depth=1
         
-        # Device tree directory
+        # Device directory
         mkdir -p device/salute/${{ github.event.inputs.device_codename }}
 
     - name: Copy device tree
       run: |
         cd twrp/device/salute/${{ github.event.inputs.device_codename }}
-        cp -r $GITHUB_WORKSPACE/*.mk $GITHUB_WORKSPACE/recovery.fstab . 2>/dev/null || true
-        if [ -d "$GITHUB_WORKSPACE/recovery" ]; then
-          cp -r $GITHUB_WORKSPACE/recovery . 2>/dev/null || true
-        fi
+        cp $GITHUB_WORKSPACE/*.mk $GITHUB_WORKSPACE/recovery.fstab . 2>/dev/null || true
 
     - name: Create envsetup.sh
       run: |
-        cd twrp
-        
-        # Создаем envsetup.sh через echo
-        mkdir -p build
-        echo '#!/bin/bash' > build/envsetup.sh
-        echo 'function lunch() {' >> build/envsetup.sh
-        echo '    echo "Lunch: twrp_$1-eng"' >> build/envsetup.sh
-        echo '    export TARGET_PRODUCT=twrp_$1' >> build/envsetup.sh
-        echo '    export TARGET_BUILD_VARIANT=eng' >> build/envsetup.sh
-        echo '    export TARGET_BUILD_TYPE=release' >> build/envsetup.sh
-        echo '    export ALLOW_MISSING_DEPENDENCIES=true' >> build/envsetup.sh
-        echo '    export LC_ALL=C' >> build/envsetup.sh
-        echo '}' >> build/envsetup.sh
-        
-        chmod +x build/envsetup.sh
+        cd twrp/build/make
+        echo 'export ALLOW_MISSING_DEPENDENCIES=true' >> core/config.mk
+        echo 'export LC_ALL=C' >> core/config.mk
 
-    - name: Build recovery directly
+    - name: Try to build
       run: |
         cd twrp/bootable/recovery
-        
-        # Прямая сборка recovery
         export ALLOW_MISSING_DEPENDENCIES=true
-        export LC_ALL=C
-        export TARGET_PRODUCT=twrp_${{ github.event.inputs.device_codename }}
         export TARGET_DEVICE=${{ github.event.inputs.device_codename }}
-        export TARGET_BUILD_VARIANT=eng
-        export OUT_DIR_COMMON_BASE=$(pwd)/../../out
         
-        echo "=== Building recovery ==="
-        
-        # Пробуем собрать
-        mmma -j2 2>&1 | tail -100 || \
-        make -j2 recoveryimage 2>&1 | tail -100
+        echo "=== Trying to build ==="
+        make -j2 recoveryimage 2>&1 | tail -50 || echo "Build failed"
 
-    - name: Check for recovery.img
-      run: |
-        echo "=== Searching for recovery.img ==="
-        find twrp -name "recovery.img" -type f 2>/dev/null | head -5
-        if [ -f "twrp/out/target/product/${{ github.event.inputs.device_codename }}/recovery.img" ]; then
-          echo "SUCCESS: recovery.img found!"
-          ls -lh twrp/out/target/product/${{ github.event.inputs.device_codename }}/recovery.img
-        else
-          echo "No recovery.img found"
-        fi
-
-    - name: Upload recovery image
-      if: success()
+    - name: Upload if exists
       uses: actions/upload-artifact@v4
+      if: always()
       with:
-        name: recovery-${{ github.event.inputs.device_codename }}
-        path: twrp/out/target/product/${{ github.event.inputs.device_codename }}/recovery.img
+        name: recovery-attempt
+        path: |
+          twrp/out/target/product/${{ github.event.inputs.device_codename }}/recovery.img
+          twrp/*.img
