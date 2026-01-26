@@ -19,41 +19,43 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y git openjdk-11-jdk python3 ccache \
+        sudo apt install -y git openjdk-17-jdk ccache python3 \
           gcc-multilib g++-multilib libc6-dev libncurses5 \
           libxml2-utils xsltproc bc bison flex curl lzop \
-          pngcrush schedtool squashfs-tools zip unzip
-        
-    - name: Install repo
-      run: |
-        mkdir -p ~/bin
-        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-        chmod +x ~/bin/repo
-        sudo mv ~/bin/repo /usr/local/bin/
+          pngcrush squashfs-tools zip unzip repo
         
     - name: Get TWRP source
       run: |
         mkdir twrp && cd twrp
-        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
-        repo sync -c -j2 --no-clone-bundle
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1
+        repo sync -c -j2
         
     - name: Copy device tree
       run: |
         mkdir -p twrp/device/salute/${{ github.event.inputs.device_name }}
-        # Копируем всё кроме .git
-        find . -maxdepth 1 -name "*" ! -name ".git" -exec cp -r {} twrp/device/salute/${{ github.event.inputs.device_name }}/ \;
+        # Копируем файлы дерева устройства
+        cp -r *.mk recovery.fstab recovery/ prebuilt/ twrp/device/salute/${{ github.event.inputs.device_name }}/ 2>/dev/null || true
+        
+    - name: Fix libbinder error
+      run: |
+        cd twrp
+        # Исправляем проблему с version_script в libbinder
+        sed -i '/version_script: "libbinder.map.txt"/d' frameworks/native/libs/binder/Android.bp 2>/dev/null || true
+        # Альтернативное исправление
+        sed -i 's/version_script: "libbinder.map.txt",/# version_script: "libbinder.map.txt",/' frameworks/native/libs/binder/Android.bp 2>/dev/null || true
         
     - name: Build
       run: |
         cd twrp
         export ALLOW_MISSING_DEPENDENCIES=true
+        export LC_ALL=C
         source build/envsetup.sh
-        lunch twrp_${{ github.event.inputs.device_name }}-eng || lunch omni_${{ github.event.inputs.device_name }}-eng
-        make recoveryimage -j2
+        lunch twrp_${{ github.event.inputs.device_name }}-eng
+        make recoveryimage -j$(nproc --all)
         
-    - name: Upload
+    - name: Upload recovery
       uses: actions/upload-artifact@v4
       if: success()
       with:
-        name: recovery
+        name: twrp-recovery
         path: twrp/out/target/product/${{ github.event.inputs.device_name }}/recovery.img
