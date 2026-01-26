@@ -176,10 +176,17 @@ jobs:
       run: |
         cd workspace
         echo "Repo workspace status:"
-        repo status
+        repo status || echo "repo status command failed, but continuing..."
         echo ""
-        echo "Manifest contents:"
-        cat .repo/manifest.xml | grep -A5 -B5 "<project"
+        echo "Checking manifest file existence..."
+        if [ -f .repo/manifest.xml ]; then
+          echo "✅ Manifest.xml exists"
+          echo "First few lines of manifest:"
+          head -20 .repo/manifest.xml
+        else
+          echo "❌ Manifest.xml not found"
+          exit 1
+        fi
 
     - name: Copy Local Device Tree
       run: |
