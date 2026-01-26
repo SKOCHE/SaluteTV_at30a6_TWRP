@@ -39,21 +39,9 @@ jobs:
       run: |
         mkdir -p twrp/device/salute/${{ github.event.inputs.device_name }}
         
-        # Копируем ВСЕ файлы из репозитория
-        find . -maxdepth 1 -type f -name "*.mk" -o -name "*.xml" -o -name "Android*" | xargs -I {} cp {} twrp/device/salute/${{ github.event.inputs.device_name }}/ 2>/dev/null || true
-        
-        # Копируем директории
-        if [ -d "device" ]; then
-          cp -r device/* twrp/device/salute/${{ github.event.inputs.device_name }}/ 2>/dev/null || true
-        fi
-        
-        if [ -d "recovery" ]; then
-          cp -r recovery twrp/device/salute/${{ github.event.inputs.device_name }}/ 2>/dev/null || true
-        fi
-        
-        if [ -d "vendor" ]; then
-          cp -r vendor twrp/device/salute/${{ github.event.inputs.device_name }}/ 2>/dev/null || true
-        fi
+        # Копируем ВСЕ файлы
+        shopt -s dotglob
+        cp -r * twrp/device/salute/${{ github.event.inputs.device_name }}/ 2>/dev/null || true
         
         cd twrp/device/salute/${{ github.event.inputs.device_name }}
         
@@ -65,67 +53,57 @@ jobs:
           elif [ -f "fstab.amlogic" ]; then
             cp fstab.amlogic recovery.fstab
             echo "Created recovery.fstab from fstab.amlogic"
-          else
-            # Минимальный fstab
-            echo "/dev/block/by-name/system /system ext4 ro" > recovery.fstab
-            echo "/dev/block/by-name/userdata /data ext4 rw" >> recovery.fstab
-            echo "Created minimal recovery.fstab"
           fi
         fi
         
-        # Проверяем необходимые файлы
         echo "Files in device directory:"
         ls -la
         
     - name: Create missing Makefiles
       run: |
         cd twrp/device/salute/${{ github.event.inputs.device_name }}
+        DEVICE_NAME="${{ github.event.inputs.device_name }}"
         
         # Если нет AndroidProducts.mk
         if [ ! -f "AndroidProducts.mk" ]; then
-          echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/twrp_${{ github.event.inputs.device_name }}.mk" > AndroidProducts.mk
-          echo "Created AndroidProducts.mk"
+          echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/twrp_${DEVICE_NAME}.mk" > AndroidProducts.mk
         fi
         
-        # Если нет twrp_<device>.mk
-        if [ ! -f "twrp_${{ github.event.inputs.device_name }}.mk" ]; then
-          cat > twrp_${{ github.event.inputs.device_name }}.mk << 'MKEOF'
-$(call inherit-product, $(SRC_TARGET_DIR)/product/base.mk)
-
-PRODUCT_DEVICE := ${{ github.event.inputs.device_name }}
-PRODUCT_NAME := twrp_${{ github.event.inputs.device_name }}
-PRODUCT_BRAND := SaluteTV
-PRODUCT_MODEL := AT30A6
-PRODUCT_MANUFACTURER := SaluteTV
-MKEOF
-          echo "Created twrp_${{ github.event.inputs.device_name }}.mk"
+        # Если нет twrp_<device>.mk - создаем через echo
+        if [ ! -f "twrp_${DEVICE_NAME}.mk" ]; then
+          echo '$(call inherit-product, $(SRC_TARGET_DIR)/product/base.mk)' > twrp_${DEVICE_NAME}.mk
+          echo '' >> twrp_${DEVICE_NAME}.mk
+          echo "PRODUCT_DEVICE := ${DEVICE_NAME}" >> twrp_${DEVICE_NAME}.mk
+          echo "PRODUCT_NAME := twrp_${DEVICE_NAME}" >> twrp_${DEVICE_NAME}.mk
+          echo 'PRODUCT_BRAND := SaluteTV' >> twrp_${DEVICE_NAME}.mk
+          echo 'PRODUCT_MODEL := AT30A6' >> twrp_${DEVICE_NAME}.mk
+          echo 'PRODUCT_MANUFACTURER := SaluteTV' >> twrp_${DEVICE_NAME}.mk
         fi
         
     - name: Build TWRP
       run: |
         cd twrp
         
-        # Экспортируем переменные
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
         
-        # Инициализация
         source build/envsetup.sh
         
         # Пробуем разные варианты lunch
         lunch omni_${{ github.event.inputs.device_name }}-eng 2>/dev/null || \
         lunch twrp_${{ github.event.inputs.device_name }}-eng 2>/dev/null || \
-        lunch lineage_${{ github.event.inputs.device_name }}-eng
+        { echo "Trying to set up manually..."; \
+          export TARGET_DEVICE=${{ github.event.inputs.device_name }}; \
+          export TARGET_PRODUCT=twrp_${{ github.event.inputs.device_name }}; }
         
-        # Сборка
         make clean
-        make recoveryimage -j$(nproc --all)
+        make recoveryimage -j2
         
     - name: Upload recovery image
       uses: actions/upload-artifact@v4
       if: success()
       with:
-        name: twrp-recovery-${{ github.event.inputs.device_name }}
+        name: twrp-recovery
         path: twrp/out/target/product/${{ github.event.inputs.device_name }}/recovery.img
         
     - name: Create release
@@ -134,6 +112,6 @@ MKEOF
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: twrp-${{ github.event.inputs.device_name }}-${{ github.run_number }}
+        tag_name: twrp-${{ github.event.inputs.device_name }}
         name: "TWRP ${{ github.event.inputs.device_name }}"
         files: twrp/out/target/product/${{ github.event.inputs.device_name }}/recovery.img
