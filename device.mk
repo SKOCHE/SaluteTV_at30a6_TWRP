@@ -1,20 +1,14 @@
-# device.mk for SaluteTV at30a6
+# Наследуем конфигурацию TWRP
+$(call inherit-product, vendor/twrp/config/common.mk)
 
-# Inherit from common
-$(call inherit-product, $(SRC_TARGET_DIR)/product/core_64_bit.mk)
-$(call inherit-product, $(SRC_TARGET_DIR)/product/full_base.mk)
-
-# Inherit from TWRP
-$(call inherit-product, $(SRC_TARGET_DIR)/product/generic_no_telephony.mk)
-
-# Device identifier
+# Определяем устройство
 PRODUCT_DEVICE := at30a6
 PRODUCT_NAME := twrp_at30a6
 PRODUCT_BRAND := SaluteTV
-PRODUCT_MODEL := SaluteTV
+PRODUCT_MODEL := at30a6 TWRP
 PRODUCT_MANUFACTURER := SaluteTV
 
-# Properties
-PRODUCT_PROPERTY_OVERRIDES := \
-    ro.build.product=at30a6 \
-    ro.twrp.device=at30a6
+# Копируем предсобранные файлы в выходной каталог
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/prebuilt/kernel:kernel \
+    $(LOCAL_PATH)/prebuilt/dt.img:dtb
