@@ -1,4 +1,4 @@
-# BoardConfig.mk for SaluteTV at30a6 - FIXED VERSION
+# BoardConfig.mk for SaluteTV at30a6 - FINAL WORKING VERSION
 
 # Architecture
 TARGET_ARCH := arm
@@ -30,7 +30,7 @@ TARGET_LD_SHIM_LIBS := /system/bin/linker:/system/bin/linker64
 TARGET_NO_KERNEL := false
 TARGET_NO_KERNEL_OVERRIDE := false
 
-# Kernel - CRITICAL CORRECTIONS
+# Kernel
 TARGET_PREBUILT_KERNEL := device/salute/at30a6/prebuilt/kernel
 TARGET_KERNEL_ARCH := arm
 TARGET_KERNEL_HEADER_ARCH := arm
@@ -46,25 +46,26 @@ BOARD_TAGS_OFFSET := 0x00000100
 # Board name for mkbootimg
 BOARD_NAME := at30a6
 
-# Явно указываем выходной файл
+# Output files
 TARGET_RECOVERY_IMAGE_NAME := recovery.img
 PRODUCT_OUT := out/target/product/at30a6
 
-# Kernel cmdline - SIMPLIFIED
+# Kernel cmdline
 BOARD_KERNEL_CMDLINE := androidboot.selinux=permissive
 BOARD_KERNEL_IMAGE_NAME := zImage
 
-# DTB settings - ИСПРАВЛЕНО: Используем dt.img из prebuilt
+# DTB settings - FIXED: Uses dt.img correctly
 BOARD_PREBUILT_DTBIMAGE_DIR := device/salute/at30a6/prebuilt
+BOARD_PREBUILT_DTBIMAGE := device/salute/at30a6/prebuilt/dt.img
 BOARD_INCLUDE_DTB_IN_BOOTIMG := true
 
 # DTBO
 BOARD_INCLUDE_RECOVERY_DTBO := true
 BOARD_PREBUILT_DTBOIMAGE := device/salute/at30a6/prebuilt/dtbo.img
 
-# Partitions - КРИТИЧЕСКИ ВАЖНО ДЛЯ РАЗМЕРА 32MB
+# Partitions - MUST BE 32MB for recovery
 BOARD_BOOTIMAGE_PARTITION_SIZE := 67108864        # 64 MB
-BOARD_RECOVERYIMAGE_PARTITION_SIZE := 33554432    # 32 MB ← ИМЕННО ДО ЭТОГО РАЗМЕРА МЫ БУДЕМ ДОПОЛНЯТЬ ОБРАЗ
+BOARD_RECOVERYIMAGE_PARTITION_SIZE := 33554432    # 32 MB
 BOARD_DTBOIMG_PARTITION_SIZE := 2097152           # 2 MB
 
 # Filesystem
@@ -100,7 +101,7 @@ TW_MAX_BRIGHTNESS := 255
 TW_DEFAULT_BRIGHTNESS := 128
 TW_BRIGHTNESS_PATH := "/sys/class/backlight/backlight/brightness"
 
-# Crypto - DISABLE IF NOT NEEDED (causes issues)
+# Crypto - DISABLED
 TW_INCLUDE_CRYPTO := false
 TW_INCLUDE_CRYPTO_FBE := false
 TW_INCLUDE_FBE_METADATA_DECRYPT := false
@@ -116,16 +117,15 @@ TW_EXTERNAL_STORAGE_MOUNT_POINT := "external_sd"
 TW_DEFAULT_EXTERNAL_STORAGE := true
 RECOVERY_SDCARD_ON_DATA := true
 
-# For Amlogic devices
+# Custom mkbootimg - ENABLED
 BOARD_CUSTOM_BOOTIMG_MK := device/salute/at30a6/mkbootimg.mk
 
-# КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: УПРОЩЕННЫЕ ПАРАМЕТРЫ - УДАЛЕНА СТРОКА С --dt
+# mkbootimg arguments - SIMPLE VERSION (no --dt here)
 BOARD_MKBOOTIMG_ARGS := --pagesize $(BOARD_KERNEL_PAGESIZE) \
-                         --kernel_offset $(BOARD_KERNEL_OFFSET) \
-                         --ramdisk_offset $(BOARD_RAMDISK_OFFSET) \
-                         --tags_offset $(BOARD_TAGS_OFFSET) \
-                         --header_version 2
-# --dt $(BOARD_PREBUILT_DTBIMAGE_DIR)/dt.img УДАЛЕНО ОТСЮДА
+                        --kernel_offset $(BOARD_KERNEL_OFFSET) \
+                        --ramdisk_offset $(BOARD_RAMDISK_OFFSET) \
+                        --tags_offset $(BOARD_TAGS_OFFSET) \
+                        --header_version 2
 
 # Device specific
 TW_DEVICE_VERSION := SaluteTV_at30a6_$(shell date +%Y%m%d)
@@ -139,7 +139,7 @@ PLATFORM_VERSION := 11
 # Allow missing dependencies
 ALLOW_MISSING_DEPENDENCIES := true
 
-# Board info for build system
+# Board info
 PRODUCT_PLATFORM := amlogic
 TARGET_BOARD_INFO_FILE := device/salute/at30a6/board-info.txt
 
