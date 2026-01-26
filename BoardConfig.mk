@@ -54,18 +54,19 @@ PRODUCT_OUT := out/target/product/at30a6
 BOARD_KERNEL_CMDLINE := androidboot.selinux=permissive
 BOARD_KERNEL_IMAGE_NAME := zImage
 
-# DTB settings - IMPORTANT: Use either dtb or dt.img, not both
+# DTB settings - ИСПРАВЛЕНО: Явно указываем путь к dtb файлу
 BOARD_PREBUILT_DTBIMAGE_DIR := device/salute/at30a6/prebuilt
+# Укажите имя вашего dtb файла (замените amlogic_at30a6.dtb на реальное имя)
+BOARD_PREBUILT_DTBIMAGE := $(BOARD_PREBUILT_DTBIMAGE_DIR)/amlogic_at30a6.dtb
 BOARD_INCLUDE_DTB_IN_BOOTIMG := true
-# BOARD_MKBOOTIMG_ARGS := --dt $(BOARD_PREBUILT_DTBIMAGE_DIR)/dt.img  # COMMENTED - CAUSES ERRORS
 
 # DTBO
 BOARD_INCLUDE_RECOVERY_DTBO := true
 BOARD_PREBUILT_DTBOIMAGE := device/salute/at30a6/prebuilt/dtbo.img
 
-# Partitions
+# Partitions - ЭТО КРИТИЧЕСКИ ВАЖНО ДЛЯ РАЗМЕРА 32MB
 BOARD_BOOTIMAGE_PARTITION_SIZE := 67108864        # 64 MB
-BOARD_RECOVERYIMAGE_PARTITION_SIZE := 33554432    # 32 MB
+BOARD_RECOVERYIMAGE_PARTITION_SIZE := 33554432    # 32 MB ← ИМЕННО ДО ЭТОГО РАЗМЕРА МЫ БУДЕМ ДОПОЛНЯТЬ ОБРАЗ
 BOARD_DTBOIMG_PARTITION_SIZE := 2097152           # 2 MB
 
 # Filesystem
@@ -117,8 +118,15 @@ TW_EXTERNAL_STORAGE_MOUNT_POINT := "external_sd"
 TW_DEFAULT_EXTERNAL_STORAGE := true
 RECOVERY_SDCARD_ON_DATA := true
 
-# For Amlogic devices
+# For Amlogic devices - ИСПРАВЛЕНО: Добавлены явные параметры для mkbootimg
 BOARD_CUSTOM_BOOTIMG_MK := device/salute/at30a6/mkbootimg.mk
+
+# КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Добавляем параметры для правильной сборки
+BOARD_MKBOOTIMG_ARGS := --pagesize $(BOARD_KERNEL_PAGESIZE) \
+                         --kernel_offset $(BOARD_KERNEL_OFFSET) \
+                         --ramdisk_offset $(BOARD_RAMDISK_OFFSET) \
+                         --tags_offset $(BOARD_TAGS_OFFSET) \
+                         --header_version 2
 
 # Device specific
 TW_DEVICE_VERSION := SaluteTV_at30a6_$(shell date +%Y%m%d)
@@ -143,4 +151,3 @@ BOARD_FLASH_BLOCK_SIZE := 131072
 TARGET_RECOVERY_OVERSCAN_PERCENT := 10
 TW_NO_SCREEN_BLANK := true
 TW_NO_SCREEN_TIMEOUT := true
-
