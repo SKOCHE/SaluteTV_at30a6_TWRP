@@ -16,7 +16,7 @@ jobs:
   build:
     if: github.event.repository.owner.id == github.event.sender.id
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     permissions:
       contents: write
       
@@ -63,13 +63,38 @@ jobs:
         cd twrp_build
         repo sync -c -j2 --no-tags --no-clone-bundle --force-sync
 
+    - name: Apply libbinder Patch
+      run: |
+        cd twrp_build
+        echo "=== Применяем патч для libbinder ==="
+        
+        # Создаем патч для frameworks/native/libs/binder/Android.bp
+        cat > libbinder_fix.patch << 'PATCHEOF'
+--- a/frameworks/native/libs/binder/Android.bp
++++ b/frameworks/native/libs/binder/Android.bp
+@@ -146,7 +146,7 @@
+         "-Wno-missing-field-initializers",
+     ],
+ 
+-    version_script: "libbinder.map.txt",
++    # version_script: "libbinder.map.txt",  # Комментируем проблемную строку
+ 
+     sanitize: {
+         misc_undefined: ["integer"],
+PATCHEOF
+        
+        # Пробуем применить патч
+        patch -p1 -f < libbinder_fix.patch || echo "Патч не применен, возможно уже исправлено"
+        
+        # Альтернативный способ - просто отключить version_script
+        sed -i 's/version_script: "libbinder.map.txt",/# version_script: "libbinder.map.txt",/' frameworks/native/libs/binder/Android.bp 2>/dev/null || true
+
     - name: Copy Device Tree
       run: |
         echo "=== Копирование дерева устройства ==="
-        # Полностью копируем репозиторий в устройство
         mkdir -p twrp_build/device/salute/at30a6
         
-        # Используем rsync для надёжного копирования
+        # Копируем всё кроме .git и yml файлов
         rsync -av --progress \
           --exclude='.git' \
           --exclude='twrp_build' \
@@ -91,11 +116,6 @@ jobs:
           elif [ -f "fstab.amlogic" ]; then
             echo "Создаю recovery.fstab из fstab.amlogic"
             cp fstab.amlogic recovery.fstab
-          else
-            echo "Создаю минимальный recovery.fstab"
-            echo "/dev/block/by-name/system     /system     ext4    ro,barrier=1    wait,slotselect" > recovery.fstab
-            echo "/dev/block/by-name/userdata   /data       ext4    nosuid,nodev,noatime    wait,check,formattable" >> recovery.fstab
-            echo "/dev/block/by-name/cache      /cache      ext4    nosuid,nodev,noatime    wait,check" >> recovery.fstab
           fi
         fi
         
@@ -105,7 +125,7 @@ jobs:
     - name: Set Swap Space
       uses: pierotofy/set-swap-space@master
       with:
-        swap-size-gb: 8
+        swap-size-gb: 12
 
     - name: Build Recovery
       run: |
@@ -117,8 +137,10 @@ jobs:
         source build/envsetup.sh
         lunch twrp_at30a6-eng
         make clean
+        
+        # Пробуем собрать с меньшим количеством потоков
         echo "=== Компиляция recoveryimage ==="
-        make recoveryimage -j2
+        make recoveryimage -j1
 
     - name: Upload Recovery Image
       uses: actions/upload-artifact@v4
