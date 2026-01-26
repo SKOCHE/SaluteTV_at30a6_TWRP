@@ -39,7 +39,7 @@ on:
 jobs:
   build:
     if: github.event.repository.owner.id == github.event.sender.id
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     timeout-minutes: 180
@@ -59,31 +59,26 @@ jobs:
         echo "::endgroup::"
 
     - name: Check Out Device Tree (Optional)
-      uses: actions/checkout@v3
-      with:
-        path: device-tree-local
+      uses: actions/checkout@v4
 
     - name: Cleanup Workspace
       uses: rokibhasansagar/slimhub_actions@main
 
-    - name: Prepare environment
+    - name: Prepare environment for Ubuntu 22.04
       run: |
         sudo apt update
         sudo apt -y upgrade
+        # Для Ubuntu 22.04/24.04 используем эти пакеты
         sudo apt -y install gperf gcc-multilib g++-multilib libc6-dev \
-          lib32ncurses5-dev x11proto-core-dev libx11-dev tree lib32z-dev \
+          libncurses-dev x11proto-core-dev libx11-dev tree lib32z-dev \
           libgl1-mesa-dev libxml2-utils xsltproc bc ccache lib32readline-dev \
-          lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev \
+          liblz4-tool libncurses5-dev libsdl1.2-dev \
           libwxgtk3.0-gtk3-dev libxml2 lzop pngcrush schedtool squashfs-tools \
           imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev \
-          libncurses5 python3 openjdk-17-jdk
-
-    - name: Install repo tool
-      run: |
-        mkdir -p ~/bin
-        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-        chmod a+x ~/bin/repo
-        sudo ln -sf ~/bin/repo /usr/bin/repo
+          python3 openjdk-17-jdk git repo
+        
+        # 32-битные библиотеки для Ubuntu 22.04+
+        sudo apt -y install lib32gcc-s1 lib32stdc++6
 
     - name: Initialize repo
       run: |
@@ -109,34 +104,6 @@ jobs:
         echo "Device tree cloned to: ./${{ github.event.inputs.DEVICE_PATH }}"
         ls -la ./${{ github.event.inputs.DEVICE_PATH }}/
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
-    - name: Check for dependencies file
-      run: |
-        echo "Checking for dependencies file..."
-        DEP_FILE="${{ github.event.inputs.DEVICE_PATH }}/twrp.dependencies"
-        if [ -f "$DEP_FILE" ]; then
-          echo "Found dependencies file: $DEP_FILE"
-          echo "Will run convert.sh if exists"
-        else
-          echo "No dependencies file found at: $DEP_FILE"
-          echo "Listing files in device directory:"
-          ls -la ${{ github.event.inputs.DEVICE_PATH }}/
-        fi
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
-    - name: Sync Device Dependencies (if convert.sh exists)
-      run: |
-        # Проверяем есть ли convert.sh в локальном дереве устройства
-        if [ -f "device-tree-local/scripts/convert.sh" ]; then
-          echo "Found convert.sh in local device tree"
-          cp -r device-tree-local/scripts workspace/
-          cd workspace
-          bash scripts/convert.sh ${{ github.event.inputs.DEVICE_PATH }}/twrp.dependencies
-          repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle
-        else
-          echo "No convert.sh found, skipping dependency sync"
-        fi
-      continue-on-error: true
 
     - name: Set Swap Space
       uses: pierotofy/set-swap-space@master
