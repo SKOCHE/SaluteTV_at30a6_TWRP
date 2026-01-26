@@ -14,69 +14,49 @@ jobs:
     timeout-minutes: 180
 
     steps:
-    # Шаг 0: Очистка диска перед началом
     - name: Clean disk space
       run: |
-        echo "=== Очистка диска ==="
+        echo "=== Cleaning disk ==="
         df -h
         sudo apt clean
-        sudo rm -rf /usr/share/dotnet
-        sudo rm -rf /opt/ghc
-        sudo rm -rf "/usr/local/share/boost"
-        sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
         df -h
 
-    # Шаг 1: Установка только необходимых зависимостей
-    - name: Install minimal dependencies
+    - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y --no-install-recommends \
-          git openjdk-17-jdk python3 \
-          gcc-multilib g++-multilib libc6-dev \
-          libxml2-utils xsltproc bc bison flex curl \
-          lzop pngcrush squashfs-tools zip unzip
-        
-    # Шаг 2: Установка repo
+        sudo apt install -y git openjdk-17-jdk python3
+        sudo apt install -y gcc-multilib g++-multilib libc6-dev
+        sudo apt install -y libxml2-utils xsltproc bc bison flex curl
+        sudo apt install -y lzop pngcrush squashfs-tools zip unzip
+
     - name: Install repo tool
       run: |
         curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
         chmod a+x ~/repo
         sudo mv ~/repo /usr/local/bin/
 
-    # Шаг 3: Минимальная инициализация TWRP
-    - name: Initialize minimal TWRP source
+    - name: Initialize TWRP source
       run: |
         mkdir twrp
         cd twrp
-        
-        # Только манифест
         git clone https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git .repo/manifests -b twrp-12.1 --depth=1
         
-        # Минимальный local_manifest только для сборки recovery
         mkdir -p .repo/local_manifests
-        cat > .repo/local_manifests/local.xml << 'XML'
-<?xml version="1.0" encoding="UTF-8"?>
-<manifest>
-  <remote name="github" fetch="https://github.com" />
-  
-  <!-- Минимальные проекты для сборки recovery -->
-  <project path="build/make" name="android_build" remote="github" revision="twrp-12.1" clone-depth="1" />
-  <project path="bootable/recovery" name="android_bootable_recovery" remote="github" revision="twrp-12.1" clone-depth="1" />
-  <project path="system/core" name="android_system_core" remote="github" revision="twrp-12.1" clone-depth="1" />
-  <project path="frameworks/base" name="android_frameworks_base" remote="github" revision="twrp-12.1" clone-depth="1" />
-  <project path="bionic" name="android_bionic" remote="github" revision="twrp-12.1" clone-depth="1" />
-</manifest>
-XML
+        echo '<?xml version="1.0" encoding="UTF-8"?>' > .repo/local_manifests/local.xml
+        echo '<manifest>' >> .repo/local_manifests/local.xml
+        echo '  <remote name="github" fetch="https://github.com" />' >> .repo/local_manifests/local.xml
+        echo '  <project path="build/make" name="android_build" remote="github" revision="twrp-12.1" clone-depth="1" />' >> .repo/local_manifests/local.xml
+        echo '  <project path="bootable/recovery" name="android_bootable_recovery" remote="github" revision="twrp-12.1" clone-depth="1" />' >> .repo/local_manifests/local.xml
+        echo '  <project path="system/core" name="android_system_core" remote="github" revision="twrp-12.1" clone-depth="1" />' >> .repo/local_manifests/local.xml
+        echo '</manifest>' >> .repo/local_manifests/local.xml
         
-        # Синхронизация только указанных проектов
         /usr/local/bin/repo sync -c -j2 --no-tags --no-clone-bundle --current-branch
 
-    # Шаг 4: Копирование дерева устройства
     - name: Copy device tree
       run: |
         mkdir -p twrp/device/salute/${{ github.event.inputs.device_codename }}
-        # Копируем только файлы .mk и recovery
-        cp *.mk recovery.fstab twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
+        cp -r *.mk recovery.fstab twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
         if [ -d "recovery" ]; then
           cp -r recovery twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
         fi
@@ -84,42 +64,36 @@ XML
           cp -r prebuilt twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
         fi
 
-    # Шаг 5: Исправление libbinder
     - name: Fix libbinder error
       run: |
         cd twrp
-        # Если файл существует - исправляем
         if [ -f "frameworks/native/libs/binder/Android.bp" ]; then
           sed -i '/version_script: "libbinder.map.txt"/d' frameworks/native/libs/binder/Android.bp
         fi
 
-    # Шаг 6: Сборка с очисткой кеша
     - name: Build recovery
       run: |
         cd twrp
-        
-        # Очистка места перед сборкой
-        ccache -C
-        rm -rf out/.lock
-        
-        # Сборка
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
         source build/envsetup.sh
-        lunch twrp_${{ github.event.inputs.device_codename }}-eng
+        
+        # Проверяем доступные продукты
+        echo "=== Available products ==="
+        get_build_var TARGET_DEVICE 2>/dev/null || true
+        
+        # Пробуем разные варианты
+        if lunch twrp_${{ github.event.inputs.device_codename }}-eng 2>/dev/null; then
+          echo "Using twrp_${{ github.event.inputs.device_codename }}-eng"
+        else
+          echo "Setting variables manually"
+          export TARGET_DEVICE=${{ github.event.inputs.device_codename }}
+          export TARGET_PRODUCT=twrp_${{ github.event.inputs.device_codename }}
+        fi
+        
         make clean
         make recoveryimage -j2
-        
-        # Проверяем результат
-        if [ -f "out/target/product/${{ github.event.inputs.device_codename }}/recovery.img" ]; then
-          echo "=== УСПЕХ! Recovery.img создан ==="
-          ls -lh out/target/product/${{ github.event.inputs.device_codename }}/recovery.img
-        else
-          echo "=== ОШИБКА! Recovery.img не создан ==="
-          find out -name "*.img" | head -10
-        fi
 
-    # Шаг 7: Загрузка
     - name: Upload recovery image
       if: success()
       uses: actions/upload-artifact@v4
