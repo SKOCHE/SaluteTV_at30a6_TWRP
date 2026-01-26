@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 180
 
     steps:
-    # Шаг 1: Установка зависимостей для Ubuntu 24.04
+    # Шаг 1: Установка зависимостей
     - name: Install dependencies
       run: |
         sudo apt update
@@ -38,33 +38,58 @@ jobs:
         /usr/local/bin/repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
           -b twrp-12.1 \
           --depth=1
+        /usr/local/bin/repo sync -c -j2 --no-tags --no-clone-bundle
 
-    # Шаг 4: Синхронизация (ограниченная)
-    - name: Sync source
-      run: |
-        cd twrp
-        timeout 600 /usr/local/bin/repo sync -c -j2 \
-          --no-tags \
-          --no-clone-bundle \
-          --current-branch \
-          --optimized-fetch \
-          --force-sync
-        
-        # Если не синхронизировалось полностью - продолжаем с тем что есть
-        echo "Sync completed or timed out"
-
-    # Шаг 5: Копирование дерева устройства
+    # Шаг 4: Копирование дерева устройства ПРАВИЛЬНО
     - name: Copy device tree
       run: |
+        echo "=== Копирование файлов дерева устройства ==="
+        
+        # Создаем структуру директорий
         mkdir -p twrp/device/salute/${{ github.event.inputs.device_codename }}
-        cp -r *.mk *.txt recovery.fstab recovery/ prebuilt/ twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
+        
+        # Список всех файлов в репозитории (кроме .git и yml)
+        echo "Содержимое текущего каталога:"
+        ls -la
+        
+        # Копируем ВСЕ файлы из текущего репозитория
+        find . -maxdepth 1 -type f ! -name ".git*" ! -name "*.yml" ! -name "*.yaml" \
+          -exec cp {} twrp/device/salute/${{ github.event.inputs.device_codename }}/ \;
+        
+        # Копируем все директории (кроме .git)
+        for dir in $(find . -maxdepth 1 -type d ! -name ".git" ! -name "." ! -name "twrp"); do
+          if [ -d "$dir" ]; then
+            echo "Копирую директорию: $dir"
+            cp -r "$dir" twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
+          fi
+        done
+        
+        # Проверяем что скопировалось
+        echo "=== Содержимое device/salute/${{ github.event.inputs.device_codename }} ==="
+        ls -la twrp/device/salute/${{ github.event.inputs.device_codename }}/
+
+    # Шаг 5: Проверка и создание недостающих файлов
+    - name: Verify device tree
+      run: |
+        cd twrp/device/salute/${{ github.event.inputs.device_codename }}
+        echo "=== Проверка файлов устройства ==="
+        
+        # Проверяем наличие ключевых файлов
+        for file in AndroidProducts.mk twrp_at30a6.mk device.mk BoardConfig.mk recovery.fstab; do
+          if [ -f "$file" ]; then
+            echo "✓ Найден: $file"
+          else
+            echo "✗ Отсутствует: $file"
+          fi
+        done
 
     # Шаг 6: Исправление libbinder
     - name: Fix libbinder error
       run: |
         cd twrp
-        # Удаляем проблемную строку с version_script
-        find . -name "Android.bp" -type f -exec sed -i '/version_script: "libbinder.map.txt"/d' {} \; 2>/dev/null || true
+        # Быстрое исправление libbinder
+        find frameworks/native/libs/binder -name "Android.bp" -type f \
+          -exec sed -i 's/version_script: "libbinder.map.txt",/# version_script: "libbinder.map.txt",/' {} \; 2>/dev/null || true
 
     # Шаг 7: Сборка
     - name: Build recovery
@@ -73,10 +98,23 @@ jobs:
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
         source build/envsetup.sh
-        lunch twrp_${{ github.event.inputs.device_codename }}-eng
-        make recoveryimage -j2
+        
+        # Сначала проверяем доступные устройства
+        echo "=== Доступные устройства ==="
+        ls device/salute/ || true
+        
+        # Пробуем запустить сборку
+        if [ -d "device/salute/${{ github.event.inputs.device_codename }}" ]; then
+          echo "Устройство найдено, запускаю lunch..."
+          lunch twrp_${{ github.event.inputs.device_codename }}-eng
+          make clean
+          make recoveryimage -j2
+        else
+          echo "ОШИБКА: device/salute/${{ github.event.inputs.device_codename }} не найден!"
+          exit 1
+        fi
 
-    # Шаг 8: Загрузка артефакта
+    # Шаг 8: Загрузка
     - name: Upload recovery image
       if: success()
       uses: actions/upload-artifact@v4
