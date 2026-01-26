@@ -1,18 +1,5 @@
-name: Simple TWRP Build
-on: workflow_dispatch
-
-jobs:
-  build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install basic tools
-      run: |
-        sudo apt update
-        sudo apname: TWRP Build with Real Ramdisk
+yaml
+name: TWRP Build with Real Ramdisk
 on: workflow_dispatch
 
 jobs:
@@ -29,9 +16,7 @@ jobs:
     - name: Install tools
       run: |
         sudo apt update
-        sudo apt install -y \
-          cpio gzip python3 git wget \
-          coreutils bc unzip
+        sudo apt install -y cpio gzip python3 git wget coreutils bc unzip
     
     - name: Download real mkbootimg
       run: |
@@ -263,77 +248,4 @@ EOF
         chmod +x test-recovery.sh
         
     - name: Run test
-      run: |
-        ./test-recovery.sht install -y \
-          cpio gzip python3 git wget \
-          coreutils bc
-    
-    - name: Download mkbootimg
-      run: |
-        # Try multiple sources for mkbootimg
-        wget -q https://raw.githubusercontent.com/osm0sis/Android-image-editor/master/mkbootimg/mkbootimg -O /tmp/mkbootimg || \
-        wget -q https://github.com/SmartPack/mkbootimg/raw/master/mkbootimg -O /tmp/mkbootimg || \
-        (echo '#!/bin/bash
-        echo "Simple mkbootimg stub"
-        cat $2 $3 $4 > $6 2>/dev/null
-        exit 0' > /tmp/mkbootimg)
-        
-        chmod +x /tmp/mkbootimg
-        sudo mv /tmp/mkbootimg /usr/local/bin/
-    
-    - name: Build recovery image
-      run: |
-        echo "=== Building recovery.img ==="
-        
-        # Create ramdisk from recovery/root
-        if [ -d "recovery/root" ]; then
-          echo "Creating ramdisk..."
-          cd recovery/root
-          find . | cpio -o -H newc 2>/dev/null | gzip > ../../ramdisk.cpio.gz
-          cd ../../
-        else
-          echo "Creating minimal ramdisk..."
-          mkdir -p tmp_ramdisk
-          echo "ro.build.product=at30a6" > tmp_ramdisk/default.prop
-          cd tmp_ramdisk
-          find . | cpio -o -H newc 2>/dev/null | gzip > ../ramdisk.cpio.gz
-          cd ..
-          rm -rf tmp_ramdisk
-        fi
-        
-        # Build recovery.img
-        echo "Building image..."
-        mkbootimg \
-          --kernel prebuilt/kernel \
-          --ramdisk ramdisk.cpio.gz \
-          --dt prebuilt/dt.img \
-          --cmdline "androidboot.selinux=permissive" \
-          --base 0x00000000 \
-          --pagesize 2048 \
-          --kernel_offset 0x00008000 \
-          --ramdisk_offset 0x01000000 \
-          --tags_offset 0x00000100 \
-          --header_version 2 \
-          --output recovery.img 2>&1 || \
-          echo "Using fallback method" && \
-          cat prebuilt/kernel ramdisk.cpio.gz prebuilt/dt.img > recovery.img
-        
-        # Pad to 32MB
-        echo "Padding to 32MB..."
-        truncate -s 33554432 recovery.img
-        
-        echo "=== RESULT ==="
-        echo "File: recovery.img"
-        echo "Size: $(stat -c%s recovery.img) bytes"
-        
-        if [ $(stat -c%s recovery.img) -eq 33554432 ]; then
-          echo "✅ SUCCESS! 32MB recovery.img created!"
-        else
-          echo "⚠️ Warning: Size is $(stat -c%s recovery.img) bytes (expected 33554432)"
-        fi
-    
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: TWRP-Recovery
-        path: recovery.img
+      run: ./test-recovery.sh
