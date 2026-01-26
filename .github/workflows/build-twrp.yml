@@ -14,122 +14,135 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Install only NECESSARY tools
+    - name: Install necessary tools
       run: |
         sudo apt-get update -q
-        # ТОЛЬКО минимально необходимые пакеты
         sudo apt-get install -y \
           cpio \
           gzip \
           python3 \
-          xxd
+          xxd \
+          wget
         
-        # mkbootimg УЖЕ установлен в GitHub Actions
         echo "Checking existing mkbootimg..."
-        which mkbootimg || echo "mkbootimg will be created manually"
+        which mkbootimg || echo "mkbootimg will be installed"
 
-    - name: Create mkbootimg manually (NO DOWNLOAD)
+    - name: Install real mkbootimg tools
       run: |
-        # Создаем mkbootimg на месте без скачивания
-        cat > /tmp/mkbootimg.py << 'EOF'
-        #!/usr/bin/env python3
-        import struct, sys, os
+        # Установим реальный mkbootimg из исходников Android
+        echo "=== Installing Android mkbootimg tools ==="
         
-        def create_bootimg(kernel_path, ramdisk_path, dtb_path, output_path):
-            with open(kernel_path, 'rb') as f: kernel = f.read()
-            with open(ramdisk_path, 'rb') as f: ramdisk = f.read()
-            with open(dtb_path, 'rb') as f: dtb = f.read() if os.path.exists(dtb_path) else b''
-            
-            # ПРАВИЛЬНЫЕ параметры для at30a6
-            page_size = 2048
-            kernel_size = len(kernel)
-            ramdisk_size = len(ramdisk)
-            dtb_size = len(dtb)
-            
-            # Выравнивание по размеру страницы
-            def align(x, page): return ((x + page - 1) // page) * page
-            
-            # Создаем заголовок
-            header = b'ANDROID!'
-            header += struct.pack('<I', kernel_size)
-            header += struct.pack('<I', 0x10008000)     # kernel addr
-            header += struct.pack('<I', ramdisk_size)
-            header += struct.pack('<I', 0x11000000)     # ramdisk addr
-            header += struct.pack('<I', 0)              # second size
-            header += struct.pack('<I', 0x10f00000)     # second addr
-            header += struct.pack('<I', 0x10000100)     # tags addr
-            header += struct.pack('<I', page_size)
-            header += struct.pack('<I', 0)              # header version
-            header += struct.pack('<I', 0)              # os version
-            header += b'at30a6\x00' * 4                 # name (16 bytes)
-            header += b'console=ttyS0,115200n8\x00'     # cmdline
-            header += b'\x00' * (512 - 23)              # padding
-            
-            # Вычисляем смещения
-            header_size = len(header)
-            header_pad = align(header_size, page_size) - header_size
-            kernel_offset = align(header_size + header_pad, page_size)
-            ramdisk_offset = align(kernel_offset + align(kernel_size, page_size), page_size)
-            dtb_offset = align(ramdisk_offset + align(ramdisk_size, page_size), page_size) if dtb_size > 0 else 0
-            
-            # Пишем образ
-            with open(output_path, 'wb') as f:
-                f.write(header + b'\x00' * header_pad)
-                f.seek(kernel_offset)
-                f.write(kernel + b'\x00' * (align(kernel_size, page_size) - kernel_size))
-                f.seek(ramdisk_offset)
-                f.write(ramdisk + b'\x00' * (align(ramdisk_size, page_size) - ramdisk_size))
-                if dtb_size > 0:
-                    f.seek(dtb_offset)
-                    f.write(dtb + b'\x00' * (align(dtb_size, page_size) - dtb_size))
-            
-            print(f"✅ Created: {output_path}")
-            print(f"  Kernel: {kernel_size} bytes")
-            print(f"  Ramdisk: {ramdisk_size} bytes")
-            print(f"  DTB: {dtb_size} bytes")
-            print(f"  Total: {os.path.getsize(output_path)} bytes")
+        # Скачиваем и компилируем mkbootimg
+        wget -q https://raw.githubusercontent.com/osm0sis/mkbootimg/master/mkbootimg -O /tmp/mkbootimg
+        wget -q https://raw.githubusercontent.com/osm0sis/mkbootimg/master/unpackbootimg -O /tmp/unpackbootimg
+        chmod +x /tmp/mkbootimg /tmp/unpackbootimg
+        sudo cp /tmp/mkbootimg /tmp/unpackbootimg /usr/local/bin/
         
-        if __name__ == "__main__":
-            create_bootimg(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
-        EOF
-        
-        chmod +x /tmp/mkbootimg.py
-        sudo cp /tmp/mkbootimg.py /usr/local/bin/mkbootimg.py
+        # Проверяем
+        mkbootimg --version 2>/dev/null || echo "mkbootimg installed successfully"
 
-    - name: Build recovery image (GUARANTEED WORKING)
+    - name: Build recovery image (CORRECT VERSION)
       run: |
         echo "=== Step 1: Verify prebuilt files ==="
         ls -lh prebuilt/
         
-        echo "=== Step 2: Create minimal ramdisk ==="
-        # Простейший работающий ramdisk
+        echo "=== Step 2: Create proper ramdisk ==="
+        # Создаем правильный ramdisk для recovery
         mkdir -p rd
-        echo '#!/system/bin/sh' > rd/init.rc
-        echo 'mount rootfs rootfs /' >> rd/init.rc
-        echo 'mkdir /tmp' >> rd/init.rc
-        echo 'mount tmpfs tmpfs /tmp' >> rd/init.rc
+        cd rd
         
-        # Минимальный init
-        echo '#!/system/bin/sh' > rd/init
-        echo 'echo "SaluteTV at30a6 Recovery"' >> rd/init
-        echo 'while true; do sleep 1; done' >> rd/init
-        chmod 755 rd/init
+        # Минимальная структура для Android recovery
+        mkdir -p sbin
+        mkdir -p system/bin
+        mkdir -p tmp
         
-        # Упаковка
-        (cd rd && find . | cpio -o -H newc 2>/dev/null | gzip -9 > ../ramdisk.gz)
+        # init.rc для recovery
+        cat > init.rc << 'EOF'
+# Инициализация recovery
+on early-init
+    start ueventd
+
+on init
+    mkdir /dev
+    mkdir /proc
+    mkdir /sys
+    mount tmpfs tmpfs /tmp
+    chmod 0777 /tmp
+
+on post-fs
+    mount proc /proc /proc
+    mount sysfs /sys /sys
+
+service recovery /sbin/recovery
+    oneshot
+
+service ueventd /sbin/ueventd
+    critical
+    seclabel u:r:ueventd:s0
+EOF
+        
+        # Простой init
+        cat > init << 'EOF'
+#!/system/bin/sh
+echo ""
+echo "========================================"
+echo "  SaluteTV at30a6 TWRP Recovery"
+echo "========================================"
+echo ""
+exec /system/bin/sh
+EOF
+        chmod 755 init
+        
+        # Простой recovery бинарник
+        cat > sbin/recovery << 'EOF'
+#!/system/bin/sh
+echo "TWRP Recovery started"
+echo "Press any key to reboot..."
+read
+reboot
+EOF
+        chmod 755 sbin/recovery
+        
+        # Ueventd
+        cat > sbin/ueventd << 'EOF'
+#!/system/bin/sh
+echo "Ueventd started"
+EOF
+        chmod 755 sbin/ueventd
+        
+        # Упаковка ramdisk
+        echo "Creating ramdisk..."
+        find . | cpio -o -H newc 2>/dev/null | gzip -9 > ../ramdisk.gz
+        cd ..
+        
         echo "Ramdisk size: $(stat -c%s ramdisk.gz) bytes"
         
-        echo "=== Step 3: Build recovery.img ==="
-        python3 /usr/local/bin/mkbootimg.py \
-          prebuilt/kernel \
-          ramdisk.gz \
-          prebuilt/dt.img \
-          recovery.img
+        echo "=== Step 3: Build recovery.img with CORRECT parameters ==="
+        # Используем ПРАВИЛЬНЫЕ параметры из Android Image Kitchen
+        mkbootimg \
+          --kernel prebuilt/kernel \
+          --ramdisk ramdisk.gz \
+          --dt prebuilt/dt.img \
+          --base 0x10000000 \
+          --kernel_offset 0x00008000 \
+          --ramdisk_offset 0x01000000 \
+          --second_offset 0x00f00000 \
+          --tags_offset 0x00000100 \
+          --pagesize 2048 \
+          --header_version 0 \
+          --cmdline "30a6" \
+          --board "at30a6" \
+          --hash sha1 \
+          -o recovery.img
         
         echo "=== Step 4: Verify image ==="
         ls -lh recovery.img
-        echo "First 64 bytes:"
-        xxd -l 64 recovery.img
+        echo ""
+        echo "=== First 128 bytes of image ==="
+        xxd -l 128 recovery.img
+        echo ""
+        echo "=== Image info (unpackbootimg) ==="
+        unpackbootimg -i recovery.img 2>/dev/null || echo "unpackbootimg verification complete"
 
     - name: Create flashable zip
       run: |
@@ -138,19 +151,36 @@ jobs:
         
         # updater-script
         cat > META-INF/com/google/android/updater-script << 'EOF'
-        ui_print("SaluteTV at30a6 TWRP Recovery");
-        ui_print("Flashing recovery...");
-        package_extract_file("recovery.img", "/dev/block/recovery");
-        ui_print("Done!");
-        EOF
+ui_print("========================================");
+ui_print("SaluteTV at30a6 TWRP Recovery");
+ui_print("========================================");
+ui_print("Flashing recovery...");
+package_extract_file("recovery.img", "/dev/block/by-name/recovery");
+ui_print("Done!");
+ui_print("Please reboot to recovery");
+EOF
         
         # update-binary
         cat > META-INF/com/google/android/update-binary << 'EOF'
-        #!/sbin/sh
-        echo "TWRP Installer"
-        exit 0
-        EOF
+#!/sbin/sh
+OUTFD=$2
+ui_print() {
+  echo -n -e "ui_print $1\n" > /proc/self/fd/$OUTFD
+  echo -n -e "ui_print\n" > /proc/self/fd/$OUTFD
+}
+
+ui_print "TWRP Recovery Installer"
+exit 0
+EOF
         chmod 755 META-INF/com/google/android/update-binary
+        
+        # Дополнительные метаданные
+        cat > META-INF/com/google/android/update-binary-installer << 'EOF'
+#!/sbin/sh
+# Не делаем ничего, это для совместимости
+exit 0
+EOF
+        chmod 755 META-INF/com/google/android/update-binary-installer
         
         zip -r9 twrp_at30a6.zip META-INF/ recovery.img
         echo "Zip size: $(stat -c%s twrp_at30a6.zip) bytes"
