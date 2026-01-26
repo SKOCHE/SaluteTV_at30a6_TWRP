@@ -23,6 +23,8 @@ jobs:
     steps:
     - name: Check Out Device Tree
       uses: actions/checkout@v4
+      with:
+        path: device_tree
 
     - name: Cleanup Workspace
       uses: rokibhasansagar/slimhub_actions@main
@@ -50,44 +52,60 @@ jobs:
         chmod a+x ~/bin/repo
         sudo cp ~/bin/repo /usr/bin/repo
 
-    - name: Initialize TWRP Source (twrp-11)
+    - name: Initialize TWRP Source
       run: |
         mkdir -p twrp_build
         cd twrp_build
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
-        # Используем twrp-11 - более стабильную версию
-        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp -b twrp-11
+        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp -b twrp-12.1
 
     - name: Sync Source Code
       run: |
         cd twrp_build
         repo sync -c -j2 --no-tags --no-clone-bundle --force-sync
 
-    - name: Fix libbinder issue
-      run: |
-        cd twrp_build
-        echo "=== Исправляем libbinder ==="
-        # Просто удаляем problem строку
-        sed -i '/version_script: "libbinder.map.txt",/d' frameworks/native/libs/binder/Android.bp 2>/dev/null || true
-
-    - name: Copy Device Tree
+    - name: Copy Device Tree (Correctly)
       run: |
         echo "=== Копирование дерева устройства ==="
         mkdir -p twrp_build/device/salute/at30a6
         
-        # Копируем всё
-        cp -r * twrp_build/device/salute/at30a6/ 2>/dev/null || true
-        cp -r .* twrp_build/device/salute/at30a6/ 2>/dev/null || true
+        # Копируем ТОЛЬКО файлы дерева устройства, НЕ twrp_build!
+        cd device_tree
+        cp -r * ../twrp_build/device/salute/at30a6/ 2>/dev/null || true
         
-        cd twrp_build/device/salute/at30a6
+        cd ../twrp_build/device/salute/at30a6
         echo "=== Содержимое директории устройства ==="
         ls -la
         
-        # Если нет recovery.fstab, создаем из twrp.flags
-        if [ ! -f "recovery.fstab" ] && [ -f "recovery/root/system/etc/twrp.flags" ]; then
-          cp recovery/root/system/etc/twrp.flags recovery.fstab
+        # Создаем recovery.fstab если нужно
+        if [ ! -f "recovery.fstab" ]; then
+          if [ -f "recovery/root/system/etc/twrp.flags" ]; then
+            cp recovery/root/system/etc/twrp.flags recovery.fstab
+          elif [ -f "fstab.amlogic" ]; then
+            cp fstab.amlogic recovery.fstab
+          fi
         fi
+        
+        # Проверяем что twrp_at30a6.mk существует
+        if [ ! -f "twrp_at30a6.mk" ]; then
+          echo "Создаю twrp_at30a6.mk"
+          cat > twrp_at30a6.mk << 'EOF'
+$(call inherit-product, device/salute/at30a6/device.mk)
+$(call inherit-product, vendor/twrp/config/common.mk)
+
+PRODUCT_DEVICE := at30a6
+PRODUCT_NAME := twrp_at30a6
+PRODUCT_BRAND := SaluteTV
+PRODUCT_MODEL := AT30A6
+PRODUCT_MANUFACTURER := SaluteTV
+EOF
+        fi
+
+    - name: Fix AndroidProducts.mk
+      run: |
+        cd twrp_build/device/salute/at30a6
+        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/twrp_at30a6.mk" > AndroidProducts.mk
 
     - name: Set Swap Space
       uses: pierotofy/set-swap-space@master
