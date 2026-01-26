@@ -51,7 +51,7 @@ BOARD_KERNEL_IMAGE_NAME := zImage
 # ------------------------------------------------------------
 # ПАРАМЕТРЫ BOOT/RECOVERY ОБРАЗА - ARM32 СМЕЩЕНИЯ
 # ------------------------------------------------------------
-# КРИТИЧЕСКАЯ ПРАВКА: Для ARM32 используем правильные адреса
+# 
 BOARD_KERNEL_BASE := 0x80000000        # Стандарт для ARM32
 BOARD_KERNEL_PAGESIZE := 2048
 BOARD_KERNEL_OFFSET := 0x00008000
@@ -91,10 +91,6 @@ BOARD_USERDATAIMAGE_PARTITION_SIZE := 12884901888 # 12GB
 BOARD_CACHEIMAGE_PARTITION_SIZE := 268435456      # 256MB
 BOARD_FLASH_BLOCK_SIZE := 4096                    # Для eMMC
 
-# ============================================================
-# КРИТИЧЕСКИЕ ПРАВКИ ДЛЯ VENDOR РАЗДЕЛА (исправление ошибки)
-# ============================================================
-# ВАЖНО: Эти строки исправляют ошибку "TARGET_COPY_OUT_VENDOR must be set to 'vendor'"
 TARGET_COPY_OUT_VENDOR := vendor
 BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
 BOARD_VENDORIMAGE_PARTITION_SIZE := 268435456      # 256MB
@@ -250,3 +246,4 @@ BOARD_VENDOR_KERNEL_MODULES :=
 # Указываем, что это устройство TV
 TARGET_USES_TV := true
 TARGET_SUPPORTS_ANDROID_TV := true
+
