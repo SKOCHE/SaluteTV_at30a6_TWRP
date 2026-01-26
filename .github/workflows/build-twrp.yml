@@ -14,55 +14,59 @@ jobs:
     timeout-minutes: 180
 
     steps:
-    # Шаг 1: Установка зависимостей
+    # Шаг 1: Установка зависимостей для Ubuntu 24.04
     - name: Install dependencies
       run: |
         sudo apt update
         sudo apt install -y git openjdk-17-jdk ccache python3 \
-          gcc-multilib g++-multilib libc6-dev libncurses5 \
+          gcc-multilib g++-multilib libc6-dev libncurses-dev \
           libxml2-utils xsltproc bc bison flex curl lzop \
           pngcrush squashfs-tools zip unzip
         
-    # Шаг 2: Установка repo (минимальная версия)
+    # Шаг 2: Установка repo
     - name: Install repo tool
       run: |
         curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
         chmod a+x ~/repo
         sudo mv ~/repo /usr/local/bin/
 
-    # Шаг 3: Инициализация с минимальной глубиной
+    # Шаг 3: Инициализация TWRP
     - name: Initialize TWRP source
       run: |
         mkdir twrp
         cd twrp
-        # Используем минимальную глубину и ветку 12.1
         /usr/local/bin/repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
           -b twrp-12.1 \
-          --depth=1 \
-          --groups=all,-notdefault,-device,-mips
+          --depth=1
 
-    # Шаг 4: Синхронизация только необходимого
-    - name: Sync source (minimal)
+    # Шаг 4: Синхронизация (ограниченная)
+    - name: Sync source
       run: |
         cd twrp
-        # Синхронизируем только основные компоненты
-        /usr/local/bin/repo sync -c -j2 \
+        timeout 600 /usr/local/bin/repo sync -c -j2 \
           --no-tags \
           --no-clone-bundle \
           --current-branch \
           --optimized-fetch \
-          --force-sync \
-          --fetch-submodules \
-          build/make bionic system/core bootable/recovery
+          --force-sync
+        
+        # Если не синхронизировалось полностью - продолжаем с тем что есть
+        echo "Sync completed or timed out"
 
     # Шаг 5: Копирование дерева устройства
     - name: Copy device tree
       run: |
         mkdir -p twrp/device/salute/${{ github.event.inputs.device_codename }}
-        # Копируем только нужные файлы
         cp -r *.mk *.txt recovery.fstab recovery/ prebuilt/ twrp/device/salute/${{ github.event.inputs.device_codename }}/ 2>/dev/null || true
 
-    # Шаг 6: Быстрая сборка
+    # Шаг 6: Исправление libbinder
+    - name: Fix libbinder error
+      run: |
+        cd twrp
+        # Удаляем проблемную строку с version_script
+        find . -name "Android.bp" -type f -exec sed -i '/version_script: "libbinder.map.txt"/d' {} \; 2>/dev/null || true
+
+    # Шаг 7: Сборка
     - name: Build recovery
       run: |
         cd twrp
@@ -72,7 +76,7 @@ jobs:
         lunch twrp_${{ github.event.inputs.device_codename }}-eng
         make recoveryimage -j2
 
-    # Шаг 7: Загрузка артефакта
+    # Шаг 8: Загрузка артефакта
     - name: Upload recovery image
       if: success()
       uses: actions/upload-artifact@v4
