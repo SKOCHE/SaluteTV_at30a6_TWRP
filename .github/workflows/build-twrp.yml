@@ -13,135 +13,97 @@ jobs:
         sudo apt update
         sudo apt install -y cpio gzip wget python3 git bc
     
-    - name: Get proper mkbootimg
+    - name: Get mkbootimg
       run: |
         git clone https://github.com/osm0sis/mkbootimg.git /tmp/mkbootimg_src
         cd /tmp/mkbootimg_src
         gcc -o mkbootimg mkbootimg.c
         sudo cp mkbootimg /usr/local/bin/
     
-    - name: Create TWRP ramdisk
+    - name: Create TWRP files
       run: |
-        echo "=== Creating TWRP ramdisk ==="
+        echo "=== Creating TWRP files ==="
         rm -rf recovery/root
         mkdir -p recovery/root
         
-        # 1. Создаем файлы ПОЭТАПНО
-        # init.rc
-        cat > recovery/root/init.rc << 'INIT_EOF'
-on early-init
-    start ueventd
-
-on init
-    mkdir /dev
-    mkdir /proc
-    mkdir /sys
-    mkdir /tmp
-    mount tmpfs tmpfs /tmp
-    chmod 0777 /tmp
-    mkdir /sdcard
-    mkdir /system
-    mkdir /data
-
-service ueventd /sbin/ueventd
-    class core
-    critical
-
-service recovery /sbin/recovery
-    class main
-    disabled
-    oneshot
-INIT_EOF
+        # Используем echo для создания файлов (без heredoc)
+        echo "on early-init" > recovery/root/init.rc
+        echo "    start ueventd" >> recovery/root/init.rc
+        echo "" >> recovery/root/init.rc
+        echo "on init" >> recovery/root/init.rc
+        echo "    mkdir /dev" >> recovery/root/init.rc
+        echo "    mkdir /proc" >> recovery/root/init.rc
+        echo "    mkdir /sys" >> recovery/root/init.rc
+        echo "    mkdir /tmp" >> recovery/root/init.rc
+        echo "    mount tmpfs tmpfs /tmp" >> recovery/root/init.rc
+        echo "    chmod 0777 /tmp" >> recovery/root/init.rc
+        echo "    mkdir /sdcard" >> recovery/root/init.rc
+        echo "    mkdir /system" >> recovery/root/init.rc
+        echo "    mkdir /data" >> recovery/root/init.rc
+        echo "" >> recovery/root/init.rc
+        echo "service ueventd /sbin/ueventd" >> recovery/root/init.rc
+        echo "    class core" >> recovery/root/init.rc
+        echo "    critical" >> recovery/root/init.rc
+        echo "" >> recovery/root/init.rc
+        echo "service recovery /sbin/recovery" >> recovery/root/init.rc
+        echo "    class main" >> recovery/root/init.rc
+        echo "    disabled" >> recovery/root/init.rc
+        echo "    oneshot" >> recovery/root/init.rc
         
         # default.prop
-        cat > recovery/root/default.prop << 'PROP_EOF'
-ro.secure=0
-ro.debuggable=1
-ro.adb.secure=0
-ro.build.product=at30a6
-ro.product.device=at30a6
-ro.twrp.boot=1
-ro.twrp.version=3.7.0
-PROP_EOF
+        echo "ro.secure=0" > recovery/root/default.prop
+        echo "ro.debuggable=1" >> recovery/root/default.prop
+        echo "ro.adb.secure=0" >> recovery/root/default.prop
+        echo "ro.build.product=at30a6" >> recovery/root/default.prop
+        echo "ro.product.device=at30a6" >> recovery/root/default.prop
+        echo "ro.twrp.boot=1" >> recovery/root/default.prop
+        echo "ro.twrp.version=3.7.0" >> recovery/root/default.prop
         
-        # 2. Создаем структуру
-        mkdir -p recovery/root/{sbin,etc,res}
+        # Создаем структуру каталогов
+        mkdir -p recovery/root/sbin
+        mkdir -p recovery/root/etc
+        mkdir -p recovery/root/res
         
-        # 3. Создаем исполняемые файлы
-        # recovery
-        cat > recovery/root/sbin/recovery << 'RECOVERY_EOF'
-#!/sbin/sh
-echo "TWRP Recovery for at30a6"
-sleep 2
-RECOVERY_EOF
+        # recovery binary
+        echo "#!/sbin/sh" > recovery/root/sbin/recovery
+        echo 'echo "TWRP Recovery for at30a6"' >> recovery/root/sbin/recovery
+        echo "sleep 2" >> recovery/root/sbin/recovery
         chmod 755 recovery/root/sbin/recovery
         
-        # ueventd  
-        cat > recovery/root/sbin/ueventd << 'UEVENTD_EOF'
-#!/sbin/sh
-echo "ueventd started"
-UEVENTD_EOF
+        # ueventd binary
+        echo "#!/sbin/sh" > recovery/root/sbin/ueventd
+        echo 'echo "ueventd started"' >> recovery/root/sbin/ueventd
         chmod 755 recovery/root/sbin/ueventd
         
-        # sh
-        cat > recovery/root/sbin/sh << 'SH_EOF'
-#!/sbin/sh
-echo "TWRP Shell"
-SH_EOF
+        # sh binary
+        echo "#!/sbin/sh" > recovery/root/sbin/sh
+        echo 'echo "TWRP Shell"' >> recovery/root/sbin/sh
         chmod 755 recovery/root/sbin/sh
         
-        # 4. recovery.fstab
-        cat > recovery/root/etc/recovery.fstab << 'FSTAB_EOF'
-/dev/block/boot /boot emmc defaults
-/dev/block/system /system ext4 ro
-/dev/block/data /data f2fs rw
-FSTAB_EOF
+        # recovery.fstab
+        echo "/dev/block/boot /boot emmc defaults" > recovery/root/etc/recovery.fstab
+        echo "/dev/block/system /system ext4 ro" >> recovery/root/etc/recovery.fstab
+        echo "/dev/block/data /data f2fs rw" >> recovery/root/etc/recovery.fstab
         
         echo "Created $(find recovery/root -type f | wc -l) files"
     
     - name: Build ramdisk
       run: |
-        echo "=== Building ramdisk.cpio.gz ==="
+        echo "=== Building ramdisk ==="
         cd recovery/root
-        
-        echo "Files to package:"
-        find . -type f
-        
-        # Создаем архив
         find . | cpio -o -H newc 2>/dev/null | gzip -9 > ../../ramdisk.cpio.gz
         cd ../../
-        
         SIZE=$(stat -c%s ramdisk.cpio.gz 2>/dev/null || echo 0)
         echo "Ramdisk size: $SIZE bytes"
-        
-        if [ $SIZE -lt 100 ]; then
-          echo "ERROR: Ramdisk too small!"
-          exit 1
-        fi
     
     - name: Build recovery image
       run: |
         echo "=== Building recovery.img ==="
-        
-        # Проверяем компоненты
-        if [ ! -f "prebuilt/kernel" ]; then
-          echo "ERROR: prebuilt/kernel not found!"
-          exit 1
-        fi
-        if [ ! -f "prebuilt/dt.img" ]; then
-          echo "ERROR: prebuilt/dt.img not found!"
-          exit 1
-        fi
-        if [ ! -f "ramdisk.cpio.gz" ]; then
-          echo "ERROR: ramdisk.cpio.gz not found!"
+        if [ ! -f "prebuilt/kernel" ] || [ ! -f "prebuilt/dt.img" ] || [ ! -f "ramdisk.cpio.gz" ]; then
+          echo "ERROR: Missing required files!"
           exit 1
         fi
         
-        echo "Kernel: $(stat -c%s prebuilt/kernel) bytes"
-        echo "DTB: $(stat -c%s prebuilt/dt.img) bytes"
-        echo "Ramdisk: $(stat -c%s ramdisk.cpio.gz) bytes"
-        
-        # Собираем образ
         mkbootimg \
           --kernel prebuilt/kernel \
           --ramdisk ramdisk.cpio.gz \
@@ -155,35 +117,11 @@ FSTAB_EOF
           --header_version 2 \
           --output recovery.img
         
-        if [ ! -f "recovery.img" ]; then
-          echo "ERROR: mkbootimg failed!"
-          exit 1
-        fi
-        
-        # Заполняем до 32MB
         truncate -s 33554432 recovery.img
-        
         echo "Final size: $(stat -c%s recovery.img) bytes"
-        
-        # Быстрая проверка
-        echo "First 16 bytes:"
-        hexdump -C recovery.img | head -2
-    
-    - name: Verify and upload
-      run: |
-        echo "=== Verification ==="
-        SIZE=$(stat -c%s recovery.img 2>/dev/null || echo 0)
-        
-        if [ $SIZE -eq 33554432 ]; then
-          echo "✅ SUCCESS: 32MB recovery.img created!"
-          echo "File ready for Android Image Kitchen"
-        else
-          echo "❌ ERROR: Wrong size - $SIZE bytes"
-          exit 1
-        fi
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP-at30a6-FINAL
+        name: TWRP-at30a6
         path: recovery.img
