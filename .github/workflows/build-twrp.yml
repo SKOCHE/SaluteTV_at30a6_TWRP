@@ -88,15 +88,6 @@ jobs:
       with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
     
-    - name: Setup zRAM instead of Swap (solves OOM errors)
-      run: |
-        echo "Setting up zRAM for better memory management..."
-        sudo apt install -y zram-config
-        sudo systemctl restart zram-config
-        echo "zRAM configured"
-        echo "=== Memory status ==="
-        free -h
-    
     - name: Install repo
       run: |
         mkdir ~/bin
@@ -149,7 +140,12 @@ jobs:
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
       continue-on-error: true
 
-    - name: Building recovery (with reduced parallelism)
+    - name: Set Swap Space
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 12
+
+    - name: Building recovery (with -j2 to avoid OOM)
       run: |
         cd workspace
         export ALLOW_MISSING_DEPENDENCIES=true
@@ -159,7 +155,7 @@ jobs:
         
         lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng
         make clean
-        # УМЕНЬШАЕМ ПАРАЛЛЕЛЬНЫЕ ЗАДАЧИ для экономии памяти
+        # Уменьшаем параллельные задачи для экономии памяти
         make ${{ github.event.inputs.BUILD_TARGET }}image -j2
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
