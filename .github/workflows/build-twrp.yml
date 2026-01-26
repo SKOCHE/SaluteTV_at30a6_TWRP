@@ -1,95 +1,180 @@
-name: Simple TWRP Builder
+name: TWRP Build for at30a6
 on: workflow_dispatch
+
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    timeout-minutes: 120
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
     
-    - name: Install tools
+    - name: Setup build environment
       run: |
-        sudo apt update
-        sudo apt install -y \
-          cpio gzip python3 android-sdk-libsparse-utils \
-          coreutils wget git
+        sudo apt-get update
+        sudo apt-get install -y \
+          git-core gnupg flex bison build-essential zip curl \
+          zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 \
+          lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
+          libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig \
+          python3 openjdk-11-jdk bc coreutils cpio gzip \
+          android-sdk-libsparse-utils libssl-dev ccache
         
-        # Скачиваем mkbootimg из альтернативного источника
-        wget -q https://raw.githubusercontent.com/osm0sis/Android-image-editor/master/mkbootimg/mkbootimg -O /tmp/mkbootimg || \
-        wget -q https://github.com/osm0sis/Android-image-editor/releases/download/v2024.02.02/mkbootimg -O /tmp/mkbootimg || \
-        (echo "Создаем простой mkbootimg..." && cat > /tmp/mkbootimg << 'EOF'
-#!/bin/bash
-echo "Simple mkbootimg stub"
-echo "Creating recovery.img from components..."
-cat "$2" "$3" "$4" > "$6" 2>/dev/null
+        # Install repo tool
+        mkdir -p ~/bin
+        curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+rx ~/bin/repo
+        echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
+    
+    - name: Build TWRP
+      run: |
+        set -e  # Exit on error
+        
+        echo "=== Starting TWRP build for at30a6 ==="
+        
+        # 1. Create directory structure
+        mkdir -p twrp/device/salute/at30a6
+        cd twrp
+        
+        # 2. Copy device tree files
+        echo "Copying device tree..."
+        cp -r ../prebuilt device/salute/at30a6/ || true
+        cp ../*.mk device/salute/at30a6/ 2>/dev/null || true
+        cp ../recovery.fstab device/salute/at30a6/ 2>/dev/null || true
+        cp ../mkbootimg.mk device/salute/at30a6/ 2>/dev/null || true
+        
+        # 3. Initialize repo
+        echo "Initializing TWRP repository..."
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
+        
+        # 4. Create local manifest
+        mkdir -p .repo/local_manifests
+        cat > .repo/local_manifests/local.xml << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <remote name="github" fetch="https://github.com/" />
+  <project path="device/salute/at30a6" 
+           name="SKOCHE/SaluteTV_at30a6_TWRP" 
+           remote="github" 
+           revision="main" />
+</manifest>
 EOF
-        )
-        chmod +x /tmp/mkbootimg
-        sudo mv /tmp/mkbootimg /usr/local/bin/
-    
-    - name: Build from components
-      run: |
-        echo "=== Сборка recovery.img из компонентов ==="
         
-        # Проверяем наличие компонентов
-        echo "Проверяем компоненты:"
-        ls -la prebuilt/
-        ls -la device/salute/at30a6/ 2>/dev/null || echo "device tree не найден"
+        # 5. Sync repositories
+        echo "Syncing repositories..."
+        repo sync -c -j2 --no-tags --no-clone-bundle --force-sync 2>&1 | tail -50
         
-        # 1. Создаем ramdisk если есть recovery/root
-        if [ -d "recovery/root" ]; then
-          echo "Создаем ramdisk из recovery/root..."
-          cd recovery/root
-          find . | cpio -o -H newc 2>/dev/null | gzip > ../../ramdisk.cpio.gz
-          cd ../../
-          echo "Ramdisk создан: $(stat -c%s ramdisk.cpio.gz) байт"
-        else
-          # Создаем минимальный ramdisk
-          echo "Создаем минимальный ramdisk..."
-          mkdir -p ramdisk_tmp
-          echo "ro.build.product=at30a6" > ramdisk_tmp/default.prop
-          cd ramdisk_tmp
-          find . | cpio -o -H newc 2>/dev/null | gzip > ../ramdisk.cpio.gz
-          cd ../
-          rm -rf ramdisk_tmp
+        # 6. Copy device tree if not synced
+        if [ ! -f "device/salute/at30a6/BoardConfig.mk" ]; then
+          echo "Manually copying device tree..."
+          cp -r ../device/salute/at30a6/* device/salute/at30a6/ 2>/dev/null || true
         fi
         
-        # 2. Собираем recovery.img
-        echo "Собираем recovery.img..."
-        mkbootimg \
-          --kernel prebuilt/kernel \
-          --ramdisk ramdisk.cpio.gz \
-          --dt prebuilt/dt.img \
-          --cmdline "androidboot.selinux=permissive" \
-          --base 0x00000000 \
-          --pagesize 2048 \
-          --kernel_offset 0x00008000 \
-          --ramdisk_offset 0x01000000 \
-          --tags_offset 0x00000100 \
-          --header_version 2 \
-          --output recovery-raw.img 2>&1 || \
-          (echo "Простой сбор:" && cat prebuilt/kernel ramdisk.cpio.gz prebuilt/dt.img > recovery-raw.img)
+        # 7. Setup build environment
+        echo "Setting up build environment..."
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export LC_ALL=C
+        export USE_CCACHE=1
+        ccache -M 10G
         
-        # 3. Заполняем до 32MB
-        echo "Заполняем до 32MB..."
-        truncate -s 33554432 recovery-raw.img
-        mv recovery-raw.img recovery.img
+        source build/envsetup.sh
         
-        echo "=== РЕЗУЛЬТАТ ==="
-        echo "Файл: recovery.img"
-        echo "Размер: $(stat -c%s recovery.img) байт"
-        echo "Ожидаемый размер: 33554432 байт (32MB)"
-        
-        if [ $(stat -c%s recovery.img) -eq 33554432 ]; then
-          echo "✅ УСПЕХ! Правильный размер!"
-        else
-          echo "⚠️ Размер отличается, но файл создан"
+        # 8. Lunch
+        echo "Running lunch..."
+        if ! lunch twrp_at30a6-eng 2>/dev/null; then
+          echo "Manual lunch setup..."
+          export TARGET_PRODUCT=twrp_at30a6
+          export TARGET_BUILD_VARIANT=eng
+          export TARGET_BUILD_TYPE=release
         fi
+        
+        # 9. Build recovery
+        echo "=== BUILDING RECOVERY ==="
+        make -j2 recoveryimage 2>&1 | tee build.log
+        
+        # 10. Find and prepare recovery.img
+        echo "=== FINDING RECOVERY.IMG ==="
+        
+        if [ -f "out/target/product/at30a6/recovery.img" ]; then
+          RECOVERY_IMG="out/target/product/at30a6/recovery.img"
+        elif [ -f "out/target/product/*/recovery.img" ]; then
+          RECOVERY_IMG="$(ls out/target/product/*/recovery.img | head -1)"
+        else
+          RECOVERY_IMG="$(find . -name "recovery.img" -type f 2>/dev/null | grep -v testdata | head -1)"
+        fi
+        
+        if [ -n "$RECOVERY_IMG" ] && [ -f "$RECOVERY_IMG" ]; then
+          echo "✅ Found recovery.img: $RECOVERY_IMG"
+          
+          # Copy to parent directory
+          cp "$RECOVERY_IMG" ../recovery.img
+          
+          # Check and adjust size
+          SIZE=$(stat -c%s ../recovery.img 2>/dev/null || echo 0)
+          echo "Original size: $SIZE bytes"
+          
+          if [ $SIZE -lt 30000000 ]; then
+            echo "Padding to 32MB..."
+            truncate -s 33554432 ../recovery.img
+            echo "New size: $(stat -c%s ../recovery.img) bytes"
+          fi
+          
+          FINAL_SIZE=$(stat -c%s ../recovery.img 2>/dev/null || echo 0)
+          echo "=== FINAL RESULT ==="
+          echo "File: ../recovery.img"
+          echo "Size: $FINAL_SIZE bytes"
+          echo "Expected: 33554432 bytes (32MB)"
+          
+          if [ $FINAL_SIZE -eq 33554432 ]; then
+            echo "🎉 SUCCESS! Correct size!"
+          else
+            echo "⚠️ Size differs, but file created"
+          fi
+          
+        else
+          echo "❌ ERROR: recovery.img not found!"
+          echo "Directory contents:"
+          ls -la out/target/product/at30a6/ 2>/dev/null || echo "Directory doesn't exist"
+          
+          # Try manual build as fallback
+          echo "Trying manual build..."
+          if [ -f "device/salute/at30a6/prebuilt/kernel" ] && [ -f "out/target/product/at30a6/ramdisk-recovery.cpio.gz" ]; then
+            mkbootimg \
+              --kernel device/salute/at30a6/prebuilt/kernel \
+              --ramdisk out/target/product/at30a6/ramdisk-recovery.cpio.gz \
+              --dt device/salute/at30a6/prebuilt/dt.img \
+              --cmdline "androidboot.selinux=permissive" \
+              --base 0x00000000 \
+              --pagesize 2048 \
+              --kernel_offset 0x00008000 \
+              --ramdisk_offset 0x01000000 \
+              --tags_offset 0x00000100 \
+              --header_version 2 \
+              --output ../recovery.img
+            
+            truncate -s 33554432 ../recovery.img
+            echo "✅ Manually created recovery.img"
+          else
+            exit 1
+          fi
+        fi
+        
+        cd ..
     
-    - name: Upload Recovery
+    - name: Upload TWRP Recovery
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP-Recovery
+        name: TWRP-at30a6
         path: recovery.img
         retention-days: 30
+    
+    - name: Upload build log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: Build-Log
+        path: twrp/build.log
+        retention-days: 7
