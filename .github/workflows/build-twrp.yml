@@ -8,9 +8,9 @@ on:
         required: true
         default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp'
       MANIFEST_BRANCH:
-        description: 'MANIFEST_BRANCH (Android 13 - twrp-13.0)'
+        description: 'MANIFEST_BRANCH'
         required: true
-        default: 'twrp-13.0'
+        default: 'twrp-12.1' 
       DEVICE_TREE_URL:
         description: 'DEVICE_TREE_URL'
         required: true
