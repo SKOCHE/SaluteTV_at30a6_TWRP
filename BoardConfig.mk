@@ -1,11 +1,12 @@
 # ============================================================
-# BoardConfig.mk - SaluteTV at30a6 (Amlogic platform)
+# BoardConfig.mk - SaluteTV at30a6 (Amlogic platform) - ARM32
 # Полная версия для сборки TWRP через AOSP build system
 # ============================================================
 
 # ------------------------------------------------------------
 # Архитектура процессора (Amlogic S905X?/S905Y? - ARM 32-bit)
 # ------------------------------------------------------------
+# ВАЖНО: Устройство 32-bit ARMv7
 TARGET_ARCH := arm
 TARGET_ARCH_VARIANT := armv7-a-neon
 TARGET_CPU_VARIANT := cortex-a7
@@ -45,13 +46,13 @@ TARGET_PREBUILT_KERNEL := device/salute/at30a6/prebuilt/kernel
 TARGET_KERNEL_ARCH := arm
 TARGET_KERNEL_HEADER_ARCH := arm
 TARGET_KERNEL_CROSS_COMPILE_PREFIX := arm-linux-androideabi-
-TARGET_KERNEL_SOURCE := kernel/amlogic/common
 BOARD_KERNEL_IMAGE_NAME := zImage
 
 # ------------------------------------------------------------
-# ПАРАМЕТРЫ BOOT/RECOVERY ОБРАЗА (из Android Image Kitchen)
+# ПАРАМЕТРЫ BOOT/RECOVERY ОБРАЗА - ARM32 СМЕЩЕНИЯ
 # ------------------------------------------------------------
-BOARD_KERNEL_BASE := 0x00000000
+# КРИТИЧЕСКАЯ ПРАВКА: Для ARM32 используем правильные адреса
+BOARD_KERNEL_BASE := 0x80000000        # Стандарт для ARM32
 BOARD_KERNEL_PAGESIZE := 2048
 BOARD_KERNEL_OFFSET := 0x00008000
 BOARD_RAMDISK_OFFSET := 0x01000000
@@ -73,7 +74,6 @@ BOARD_BOOTIMG_HEADER_VERSION := 0
 # DTB/DTBO КОНФИГУРАЦИЯ
 # ------------------------------------------------------------
 BOARD_PREBUILT_DTBIMAGE_DIR := device/salute/at30a6/prebuilt
-BOARD_PREBUILT_DTBIMAGE := dt.img
 BOARD_INCLUDE_DTB_IN_BOOTIMG := true
 
 # DTBO (если есть)
@@ -91,6 +91,21 @@ BOARD_USERDATAIMAGE_PARTITION_SIZE := 12884901888 # 12GB
 BOARD_CACHEIMAGE_PARTITION_SIZE := 268435456      # 256MB
 BOARD_FLASH_BLOCK_SIZE := 4096                    # Для eMMC
 
+# ============================================================
+# КРИТИЧЕСКИЕ ПРАВКИ ДЛЯ VENDOR РАЗДЕЛА (исправление ошибки)
+# ============================================================
+# ВАЖНО: Эти строки исправляют ошибку "TARGET_COPY_OUT_VENDOR must be set to 'vendor'"
+TARGET_COPY_OUT_VENDOR := vendor
+BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
+BOARD_VENDORIMAGE_PARTITION_SIZE := 268435456      # 256MB
+
+# Определяем, что устройство имеет vendor раздел
+TARGET_COPY_OUT_VENDOR := vendor
+BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
+TARGET_COPY_OUT_VENDOR := vendor  # Явное определение
+
+# ============================================================
+
 # ------------------------------------------------------------
 # ФАЙЛОВЫЕ СИСТЕМЫ
 # ------------------------------------------------------------
@@ -99,7 +114,6 @@ TARGET_USERIMAGES_USE_F2FS := true
 BOARD_HAS_LARGE_FILESYSTEM := true
 BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE := ext4
 BOARD_USERDATAIMAGE_FILE_SYSTEM_TYPE := f2fs
-BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
 BOARD_CACHEIMAGE_FILE_SYSTEM_TYPE := ext4
 
 # System-as-root
