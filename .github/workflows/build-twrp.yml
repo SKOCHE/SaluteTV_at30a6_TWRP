@@ -1,95 +1,205 @@
-name: Build TWRP
+name: Recovery Build - at30a6
 
 on:
   workflow_dispatch:
     inputs:
-      device_codename:
-        description: 'Device codename'
+      MANIFEST_URL:
+        description: 'MANIFEST_URL'
+        required: true
+        default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp'
+      MANIFEST_BRANCH:
+        description: 'MANIFEST_BRANCH'
+        required: true
+        default: 'twrp-12.1'
+      DEVICE_TREE_URL:
+        description: 'DEVICE_TREE_URL'
+        required: true
+        default: 'https://github.com/SKOCHE/SaluteTV_at30a6_TWRP'
+      DEVICE_TREE_BRANCH:
+        description: 'DEVICE_TREE_BRANCH'
+        required: true
+        default: 'main'
+      DEVICE_PATH:
+        description: 'DEVICE_PATH'
+        required: true
+        default: 'device/salute/at30a6'
+      DEVICE_NAME:
+        description: 'DEVICE_NAME'
         required: true
         default: 'at30a6'
+      MAKEFILE_NAME:
+        description: 'MAKEFILE_NAME'
+        required: true
+        default: 'twrp_at30a6'
+      BUILD_TARGET:
+        description: 'BUILD_TARGET'
+        required: true
+        default: 'recovery'
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-
+    if: github.event.repository.owner.id == github.event.sender.id
+    runs-on: ubuntu-20.04
+    permissions:
+      contents: write
+    timeout-minutes: 180
+    
     steps:
-    - name: Clean disk
+    - name: Display Run Parameters
       run: |
-        sudo apt clean
-        sudo rm -rf /usr/share/dotnet
+        echo "::group::Build Parameters"
+        echo "Manifest URL: ${{ github.event.inputs.MANIFEST_URL }}"
+        echo "Manifest Branch: ${{ github.event.inputs.MANIFEST_BRANCH }}"
+        echo "Device Tree URL: ${{ github.event.inputs.DEVICE_TREE_URL }}"
+        echo "Device Tree Branch: ${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
+        echo "Device Path: ${{ github.event.inputs.DEVICE_PATH }}"
+        echo "Device Name: ${{ github.event.inputs.DEVICE_NAME }}"
+        echo "Makefile Name: ${{ github.event.inputs.MAKEFILE_NAME }}"
+        echo "Build Target: ${{ github.event.inputs.BUILD_TARGET }}.img"
+        echo "::endgroup::"
 
-    - name: Install dependencies
+    - name: Check Out Device Tree (Optional)
+      uses: actions/checkout@v3
+      with:
+        path: device-tree-local
+
+    - name: Cleanup Workspace
+      uses: rokibhasansagar/slimhub_actions@main
+
+    - name: Prepare environment
       run: |
         sudo apt update
-        sudo apt install -y git openjdk-17-jdk python3
-        sudo apt install -y gcc-multilib g++-multilib libc6-dev
-        sudo apt install -y libxml2-utils xsltproc bc bison flex curl
+        sudo apt -y upgrade
+        sudo apt -y install gperf gcc-multilib g++-multilib libc6-dev \
+          lib32ncurses5-dev x11proto-core-dev libx11-dev tree lib32z-dev \
+          libgl1-mesa-dev libxml2-utils xsltproc bc ccache lib32readline-dev \
+          lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev \
+          libwxgtk3.0-gtk3-dev libxml2 lzop pngcrush schedtool squashfs-tools \
+          imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev \
+          libncurses5 python3 openjdk-17-jdk
 
-    - name: Download minimal sources
+    - name: Install repo tool
       run: |
-        mkdir twrp
-        cd twrp
-        
-        echo "=== Cloning minimal sources ==="
-        
-        # Build system
-        git clone https://github.com/LineageOS/android_build.git build/make -b lineage-20.0 --depth=1
-        
-        # Recovery
-        git clone https://github.com/TeamWin/android_bootable_recovery.git bootable/recovery -b android-12.1 --depth=1
-        
-        # System core
-        git clone https://github.com/LineageOS/android_system_core.git system/core -b lineage-20.0 --depth=1
-        
-        # Bionic
-        git clone https://github.com/LineageOS/android_bionic.git bionic -b lineage-20.0 --depth=1
-        
-        # Create device directory
-        mkdir -p device/salute/${{ github.event.inputs.device_codename }}
+        mkdir -p ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        sudo ln -sf ~/bin/repo /usr/bin/repo
 
-    - name: Copy device tree
+    - name: Initialize repo
       run: |
-        cd twrp/device/salute/${{ github.event.inputs.device_codename }}
-        cp $GITHUB_WORKSPACE/*.mk $GITHUB_WORKSPACE/recovery.fstab . 2>/dev/null || true
+        mkdir workspace
+        cd workspace
+        echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        repo init --depth=1 -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }}
+      id: pwd
 
-    - name: Try to build with minimal setup
+    - name: Repo Sync
       run: |
-        cd twrp
-        
-        # Создаем минимальное окружение
+        repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle
+      working-directory: workspace
+
+    - name: Clone device tree
+      run: |
+        # Удаляем старую директорию если есть
+        rm -rf ./${{ github.event.inputs.DEVICE_PATH }} 2>/dev/null || true
+        # Клонируем дерево устройства
+        git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
+        echo "Device tree cloned to: ./${{ github.event.inputs.DEVICE_PATH }}"
+        ls -la ./${{ github.event.inputs.DEVICE_PATH }}/
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
+    - name: Check for dependencies file
+      run: |
+        echo "Checking for dependencies file..."
+        DEP_FILE="${{ github.event.inputs.DEVICE_PATH }}/twrp.dependencies"
+        if [ -f "$DEP_FILE" ]; then
+          echo "Found dependencies file: $DEP_FILE"
+          echo "Will run convert.sh if exists"
+        else
+          echo "No dependencies file found at: $DEP_FILE"
+          echo "Listing files in device directory:"
+          ls -la ${{ github.event.inputs.DEVICE_PATH }}/
+        fi
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
+    - name: Sync Device Dependencies (if convert.sh exists)
+      run: |
+        # Проверяем есть ли convert.sh в локальном дереве устройства
+        if [ -f "device-tree-local/scripts/convert.sh" ]; then
+          echo "Found convert.sh in local device tree"
+          cp -r device-tree-local/scripts workspace/
+          cd workspace
+          bash scripts/convert.sh ${{ github.event.inputs.DEVICE_PATH }}/twrp.dependencies
+          repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle
+        else
+          echo "No convert.sh found, skipping dependency sync"
+        fi
+      continue-on-error: true
+
+    - name: Set Swap Space
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 12
+
+    - name: Building recovery
+      run: |
+        cd workspace
+        source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
-        export TARGET_DEVICE=${{ github.event.inputs.device_codename }}
-        export TARGET_PRODUCT=twrp_${{ github.event.inputs.device_codename }}
         
         echo "=== Setting up environment ==="
+        echo "Trying lunch with: ${{ github.event.inputs.MAKEFILE_NAME }}-eng"
         
-        # Пробуем инициализировать
-        if [ -f "build/make/envsetup.sh" ]; then
-          source build/make/envsetup.sh
-          lunch twrp_${{ github.event.inputs.device_codename }}-eng 2>/dev/null || true
+        # Пробуем lunch
+        if lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng; then
+          echo "Lunch successful!"
+          make clean
+          echo "Building ${{ github.event.inputs.BUILD_TARGET }}image..."
+          make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
+        else
+          echo "Lunch failed, checking device directory..."
+          ls -la ${{ github.event.inputs.DEVICE_PATH }}/
+          echo "Trying manual build..."
+          export TARGET_DEVICE=${{ github.event.inputs.DEVICE_NAME }}
+          export TARGET_PRODUCT=${{ github.event.inputs.MAKEFILE_NAME }}
+          make clean
+          make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
         fi
-        
-        echo "=== Building recovery ==="
-        
-        # Пробуем собрать из recovery директории
-        cd bootable/recovery
-        mmma -j2 2>&1 | tail -100 || \
-        echo "Build attempt finished"
 
-    - name: Check for any output
+    - name: Check build output
       run: |
         echo "=== Checking for build output ==="
-        find twrp -name "*.img" -type f 2>/dev/null | head -10 || echo "No images found"
-        find twrp -name "recovery*" -type f 2>/dev/null | head -10 || echo "No recovery files"
+        cd workspace
+        if [ -f "out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img" ]; then
+          echo "SUCCESS: ${{ github.event.inputs.BUILD_TARGET }}.img found!"
+          ls -lh "out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img"
+        else
+          echo "ERROR: ${{ github.event.inputs.BUILD_TARGET }}.img not found!"
+          echo "Searching for any .img files..."
+          find out -name "*.img" -type f 2>/dev/null | head -20
+          echo "Contents of out directory:"
+          ls -la out/target/product/ 2>/dev/null || echo "No out directory"
+        fi
 
-    - name: Upload any artifacts
-      if: always()
-      uses: actions/upload-artifact@v4
+    - name: Upload to Release
+      if: success()
+      uses: softprops/action-gh-release@v1
       with:
-        name: build-output
-        path: |
-          twrp/out/
-          twrp/*.img
-          twrp/*.zip
+        files: workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img
+        name: ${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
+        tag_name: build-${{ github.run_id }}
+        body: |
+          TWRP Recovery for SaluteTV at30a6
+          
+          Build Parameters:
+          - Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}
+          - Device: ${{ github.event.inputs.DEVICE_NAME }}
+          - Target: ${{ github.event.inputs.BUILD_TARGET }}.img
+          - Tree: ${{ github.event.inputs.DEVICE_TREE_URL }}
+          
+          Built via GitHub Actions
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
