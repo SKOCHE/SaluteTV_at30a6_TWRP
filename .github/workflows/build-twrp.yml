@@ -1,98 +1,231 @@
-name: Build TWRP (Android 13)
+name: Recovery Build
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
+    inputs:
+      MANIFEST_URL:
+        description: 'MANIFEST_URL (if want to use SSH keys, use git@github.com:XXXXX)'
+        required: true
+        default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp'
+      MANIFEST_BRANCH:
+        description: 'MANIFEST_BRANCH (Android 13 - twrp-13.0)'
+        required: true
+        default: 'twrp-13.0'
+      DEVICE_TREE_URL:
+        description: 'DEVICE_TREE_URL'
+        required: true
+        default: 'https://github.com/SKOCHE/SaluteTV_at30a6_TWRP'
+      DEVICE_TREE_BRANCH:
+        description: 'DEVICE_TREE_BRANCH'
+        required: true
+        default: 'main'
+      DEVICE_PATH:
+        description: 'DEVICE_PATH'
+        required: true
+        default: 'device/salute/at30a6'
+      COMMON_TREE_URL:
+        description: 'COMMON_TREE_URL (if no common tree, leave blank)'
+        required: false
+      COMMON_PATH:
+        description: 'COMMON_PATH (if no common tree, leave blank)'
+        required: false
+      DEVICE_NAME:
+        description: 'DEVICE_NAME'
+        required: true
+        default: 'at30a6'
+      MAKEFILE_NAME:
+        description: 'MAKEFILE_NAME'
+        required: true
+        default: 'twrp_at30a6'
+      BUILD_TARGET:
+        description: 'BUILD_TARGET'
+        required: true
+        default: 'recovery'
 
 jobs:
   build:
+    if: github.event.repository.owner.id == github.event.sender.id
     runs-on: ubuntu-22.04
     timeout-minutes: 120
-
+    permissions:
+      contents: write
+      
     steps:
-    - name: Checkout Device Tree
-      uses: actions/checkout@v4
-
-    - name: Install Essential Build Tools
+    - name: Display Run Parameters
       run: |
-        sudo apt-get update -y
-        sudo apt-get install -y \
+        echo "::group::Build Configuration"
+        echo "Manifest URL: ${{ github.event.inputs.MANIFEST_URL }}"
+        echo "Manifest Branch: ${{ github.event.inputs.MANIFEST_BRANCH }}"
+        echo "Device Tree URL: ${{ github.event.inputs.DEVICE_TREE_URL }}"
+        echo "Device Tree Branch: ${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
+        echo "Device Path: ${{ github.event.inputs.DEVICE_PATH }}"
+        echo "Device Name: ${{ github.event.inputs.DEVICE_NAME }}"
+        echo "Makefile Name: ${{ github.event.inputs.MAKEFILE_NAME }}"
+        echo "Build Target: ${{ github.event.inputs.BUILD_TARGET }}.img"
+        echo "::endgroup::"
+
+    - name: Check Out This Repository
+      uses: actions/checkout@v4
+      with:
+        path: local_tree
+
+    - name: Prepare Environment
+      run: |
+        sudo apt update -y
+        sudo apt install -y \
           git-core gnupg flex bison build-essential zip \
           curl zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 \
-          libncurses5 lib32ncurses5-dev x11proto-core-dev libx11-dev \
-          lib32z1-dev liblz4-tool libssl-dev libxml2-utils xsltproc unzip \
-          fontconfig python2 python3 repo bc rsync schedtool
+          lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
+          libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig \
+          python2 python3 bc ccache liblz4-tool libncurses5 \
+          libssl-dev libsdl1.2-dev libwxgtk3.0-gtk3-dev lzop \
+          pngcrush schedtool squashfs-tools tree rsync
 
-    - name: Clone and Setup TWRP Source
+    - name: Install OpenJDK 17 (for Android 13)
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Setup SSH Keys (if needed)
+      if: ${{ startsWith(github.event.inputs.MANIFEST_URL, 'git@github.com') }}
+      uses: webfactory/ssh-agent@v0.5.4
+      with:
+        ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+    - name: Install repo tool
       run: |
-        # Клонируем TWRP для Android 13
-        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-13.0 --depth=1
-        
-        # Создаем путь для устройства и копируем файлы
-        mkdir -p device/salute/at30a6
-        cp -r ./* device/salute/at30a6/ 2>/dev/null || true
-        
-        # Синхронизируем
+        sudo apt install -y repo
+        repo --version
+
+    - name: Initialize repo workspace
+      run: |
+        mkdir -p workspace
+        cd workspace
+        echo "workspace=$(pwd)" >> $GITHUB_ENV
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        repo init --depth=1 -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }}
+
+    - name: Repo Sync
+      run: |
+        cd workspace
         repo sync -c -j$(nproc) --no-tags --no-clone-bundle --force-sync
 
-    - name: Fix Android Version
+    - name: Copy Local Device Tree
       run: |
-        cd device/salute/at30a6
-        sed -i 's/PLATFORM_VERSION := 11/PLATFORM_VERSION := 13/' BoardConfig.mk
-        sed -i 's/PLATFORM_SECURITY_PATCH := 2099-12-31/PLATFORM_SECURITY_PATCH := 2025-01-01/' BoardConfig.mk
-        echo "Fixed Android version to 13"
+        # Используем локальные файлы вместо клонирования
+        mkdir -p workspace/${{ github.event.inputs.DEVICE_PATH }}
+        cp -r local_tree/* workspace/${{ github.event.inputs.DEVICE_PATH }}/
+        
+        # Автоматически фиксим Android версию в BoardConfig.mk
+        cd workspace/${{ github.event.inputs.DEVICE_PATH }}
+        if [ -f BoardConfig.mk ]; then
+          echo "Fixing Android version in BoardConfig.mk..."
+          sed -i 's/^PLATFORM_VERSION := .*/PLATFORM_VERSION := 13/' BoardConfig.mk
+          sed -i 's/^PLATFORM_SECURITY_PATCH := .*/PLATFORM_SECURITY_PATCH := 2025-01-01/' BoardConfig.mk
+          echo "Fixed BoardConfig.mk for Android 13"
+        fi
+
+    - name: Clone Common Tree (if specified)
+      if: |
+        github.event.inputs.COMMON_TREE_URL != null 
+        && github.event.inputs.COMMON_TREE_URL != ''
+        && github.event.inputs.COMMON_PATH != null 
+        && github.event.inputs.COMMON_PATH != ''
+      run: |
+        cd workspace
+        git clone ${{ github.event.inputs.COMMON_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.COMMON_PATH }}
+
+    - name: Check Build Tree Type
+      id: buildtree
+      run: |
+        # Определяем тип дерева сборки
+        if [[ "${{ github.event.inputs.MANIFEST_BRANCH }}" == *"twrp-11"* ]] || [[ "${{ github.event.inputs.MANIFEST_BRANCH }}" == *"twrp-12"* ]]; then
+          echo "tree_type=twrp" >> $GITHUB_OUTPUT
+        else
+          echo "tree_type=omni" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Set Swap Space
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 8
 
     - name: Build Recovery
       run: |
-        # Настройка окружения
+        cd workspace
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
         
         source build/envsetup.sh
-        lunch twrp_at30a6-userdebug
         
-        # Сборка с записью лога
-        mka recoveryimage 2>&1 | tee /tmp/build.log
-
-    - name: Check and Prepare Artifacts
-      run: |
-        echo "=== Checking build results ==="
-        
-        # Проверяем recovery.img
-        if [ -f out/target/product/at30a6/recovery.img ]; then
-          echo "✅ Recovery image found"
-          ls -lh out/target/product/at30a6/recovery.img
-          
-          # Копируем ключевые файлы в корень для удобной загрузки
-          cp out/target/product/at30a6/recovery.img recovery.img
-          cp /tmp/build.log build.log
-          cp device/salute/at30a6/BoardConfig.mk BoardConfig.mk
+        # Пробуем lunch с userdebug (стандарт для TWRP)
+        if lunch ${{ github.event.inputs.MAKEFILE_NAME }}-userdebug; then
+          echo "Using userdebug variant"
         else
-          echo "❌ Recovery image NOT found"
-          echo "Listing out/target/product/at30a6/:"
-          ls -la out/target/product/at30a6/ || true
+          # Fallback на eng если userdebug не найден
+          lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng
+        fi
+        
+        # Очистка и сборка
+        make clean
+        mka ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc) 2>&1 | tee build.log
+
+    - name: Verify Build Output
+      run: |
+        cd workspace
+        OUTPUT_FILE="out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img"
+        
+        if [ -f "$OUTPUT_FILE" ]; then
+          echo "✅ SUCCESS: Recovery image created!"
+          ls -lh "$OUTPUT_FILE"
+          echo "Size: $(stat -c%s "$OUTPUT_FILE") bytes"
+          
+          # Копируем для удобной загрузки
+          cp "$OUTPUT_FILE" recovery.img
+          cp build.log build.log
+        else
+          echo "❌ FAILED: Recovery image not found"
+          echo "Searching in out/target/product/${{ github.event.inputs.DEVICE_NAME }}:"
+          ls -la "out/target/product/${{ github.event.inputs.DEVICE_NAME }}/" || true
           exit 1
         fi
 
-    - name: Upload Success Artifacts
-      if: success()
+    - name: Upload to Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: TWRP-Recovery-Build
+        name: TWRP-${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_number }}
         path: |
-          recovery.img
-          build.log
-          BoardConfig.mk
-        retention-days: 7
-
-    - name: Upload Failure Logs
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: Build-Failure-Logs
-        path: |
-          /tmp/build.log
-          device/salute/at30a6/BoardConfig.mk
-          device/salute/at30a6/*.mk
+          workspace/recovery.img
+          workspace/build.log
+          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
         retention-days: 30
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      if: success()
+      with:
+        files: workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img
+        name: "TWRP ${{ github.event.inputs.DEVICE_NAME }} - Build #${{ github.run_number }}"
+        tag_name: "build-${{ github.run_number }}"
+        body: |
+          ### SaluteTV at30a6 TWRP Recovery
+          
+          **Build Information:**
+          - Device: ${{ github.event.inputs.DEVICE_NAME }}
+          - Android Version: 13 (TWRP ${{ github.event.inputs.MANIFEST_BRANCH }})
+          - Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          - Build ID: ${{ github.run_id }}
+          
+          **Build Parameters:**
+          - Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}
+          - Device Tree: ${{ github.event.inputs.DEVICE_TREE_URL }}
+          - Target: ${{ github.event.inputs.BUILD_TARGET }}.img
+          
+          **Installation:**
+          1. Boot to fastboot mode
+          2. `fastboot flash recovery recovery.img`
+          3. `fastboot reboot recovery`
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
