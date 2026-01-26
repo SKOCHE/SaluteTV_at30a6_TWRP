@@ -36,21 +36,20 @@ jobs:
           liblz4-tool liblzma-dev zlib1g-dev libbz2-dev libfl-dev \
           libssl-dev libcap-dev libpam0g-dev libnuma-dev
         
-        # Установка mkbootimg и unmkbootimg из репозитория LineageOS
-        # Сначала установим необходимые зависимости для их сборки
-        sudo apt-get install -y libc6-dev-i386
-        
-        # Скачиваем и компилируем mkbootimg/unmkbootimg
+        # Установка mkbootimg и unpackbootimg из репозитория osm0sis
         mkdir -p /tmp/android-tools
         cd /tmp/android-tools
         git clone https://github.com/osm0sis/mkbootimg.git
         cd mkbootimg
         make
-        sudo cp mkbootimg unmkbootimg /usr/local/bin/
+        sudo cp mkbootimg unpackbootimg /usr/local/bin/
         
         # Проверяем установку
         which mkbootimg && mkbootimg --version || echo "mkbootimg installed"
-        which unmkbootimg && echo "unmkbootimg installed"
+        which unpackbootimg && echo "unpackbootimg installed"
+        
+        # Создаем симлинк для совместимости (необязательно, но полезно)
+        sudo ln -sf /usr/local/bin/unpackbootimg /usr/local/bin/unmkbootimg
         
         # Альтернативно можно установить abootimg (есть в репозиториях)
         sudo apt-get install -y abootimg
