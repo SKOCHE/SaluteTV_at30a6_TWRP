@@ -116,16 +116,16 @@ TW_EXTERNAL_STORAGE_MOUNT_POINT := "external_sd"
 TW_DEFAULT_EXTERNAL_STORAGE := true
 RECOVERY_SDCARD_ON_DATA := true
 
-# For Amlogic devices - ИСПРАВЛЕНО: Добавлены явные параметры для mkbootimg
+# For Amlogic devices
 BOARD_CUSTOM_BOOTIMG_MK := device/salute/at30a6/mkbootimg.mk
 
-# КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Параметры для mkbootimg с dt.img
+# КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: УПРОЩЕННЫЕ ПАРАМЕТРЫ - УДАЛЕНА СТРОКА С --dt
 BOARD_MKBOOTIMG_ARGS := --pagesize $(BOARD_KERNEL_PAGESIZE) \
                          --kernel_offset $(BOARD_KERNEL_OFFSET) \
                          --ramdisk_offset $(BOARD_RAMDISK_OFFSET) \
                          --tags_offset $(BOARD_TAGS_OFFSET) \
-                         --header_version 2 \
-                         --dt $(BOARD_PREBUILT_DTBIMAGE_DIR)/dt.img  # ← ВАЖНО: используем dt.img
+                         --header_version 2
+# --dt $(BOARD_PREBUILT_DTBIMAGE_DIR)/dt.img УДАЛЕНО ОТСЮДА
 
 # Device specific
 TW_DEVICE_VERSION := SaluteTV_at30a6_$(shell date +%Y%m%d)
