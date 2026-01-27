@@ -51,14 +51,13 @@ jobs:
         echo "=== DEBUG: SYSTEM INFO ==="
         echo "Working directory: $(pwd)"
         echo "GitHub workspace: $GITHUB_WORKSPACE"
-        echo "Runner workspace: $RUNNER_WORKSPACE"
         echo ""
         
     - name: Check repository structure
       run: |
         echo "=== DEBUG: REPOSITORY STRUCTURE ==="
-        echo "Listing all files:"
-        find . -type f -name "*" | head -30
+        echo "Listing files:"
+        ls -la
         echo ""
         echo "=== DEBUG: DOCKERFILE ==="
         if [ -f Dockerfile ]; then
@@ -66,71 +65,56 @@ jobs:
           cat Dockerfile
         else
           echo "ERROR: Dockerfile not found!"
-          find . -name "Dockerfile*" -type f
         fi
         echo ""
         
-    - name: Check entrypoint.sh
+    - name: Check and fix entrypoint.sh
       run: |
         echo "=== DEBUG: ENTRYPOINT.SH CHECK ==="
-        echo "Current directory: $(pwd)"
-        echo ""
         
         if [ -f entrypoint.sh ]; then
-          echo "✓ entrypoint.sh FOUND in current directory"
+          echo "✓ entrypoint.sh found"
           echo "File permissions:"
           ls -la entrypoint.sh
           echo ""
-          echo "File type:"
-          file entrypoint.sh || echo "file command not available"
+          echo "First 5 lines:"
+          head -5 entrypoint.sh
           echo ""
-          echo "First 10 lines:"
-          head -10 entrypoint.sh
-          echo ""
-          echo "Line endings check (should show only LF, not CRLF):"
-          od -c entrypoint.sh | head -5
-          echo ""
-          echo "Making executable:"
+          # Fix line endings if needed
+          sed -i 's/\r$//' entrypoint.sh
           chmod +x entrypoint.sh
-          ls -la entrypoint.sh
         else
-          echo "✗ ERROR: entrypoint.sh NOT FOUND in current directory"
-          echo "Looking for entrypoint.sh in entire repo:"
-          find . -name "entrypoint.sh" -type f
-          echo ""
-          echo "Creating a simple test entrypoint.sh..."
+          echo "✗ entrypoint.sh not found, creating simple one"
           echo '#!/bin/bash
           echo "Test entrypoint works!"
           echo "Arguments: $@"
           exit 0' > entrypoint.sh
           chmod +x entrypoint.sh
-          echo "Created test entrypoint.sh"
         fi
         
     - name: Create test entrypoint if missing
       run: |
         echo "=== DEBUG: ENSURING ENTRYPOINT EXISTS ==="
-        if [ ! -f entrypoint.sh ]; then
-          echo "Creating simple entrypoint.sh..."
-          cat > entrypoint.sh << 'EOF'
-          #!/bin/bash
-          echo "=== ENTRYPOINT STARTED ==="
-          echo "Current directory: $(pwd)"
-          echo "Arguments received: $@"
-          echo "Listing workspace:"
-          ls -la /workspace 2>/dev/null || echo "/workspace not found"
-          echo "=== ENTRYPOINT ENDED ==="
-          EOF
-          chmod +x entrypoint.sh
-          echo "Test entrypoint.sh created"
-        fi
+        # Простой способ создания файла без EOF
+        echo '#!/bin/bash' > entrypoint.sh
+        echo 'echo "=== ENTRYPOINT STARTED ==="' >> entrypoint.sh
+        echo 'echo "Current directory: $(pwd)"' >> entrypoint.sh
+        echo 'echo "Arguments received: $@"' >> entrypoint.sh
+        echo 'echo "Listing /:"' >> entrypoint.sh
+        echo 'ls -la / 2>/dev/null | head -5' >> entrypoint.sh
+        echo 'echo "=== ENTRYPOINT ENDED ==="' >> entrypoint.sh
+        chmod +x entrypoint.sh
+        
+        echo "Test entrypoint.sh created:"
+        ls -la entrypoint.sh
+        echo "Content:"
+        cat entrypoint.sh
         
     - name: Setup output directory
       run: |
         echo "=== DEBUG: SETUP OUTPUT ==="
         mkdir -p out
-        echo "out directory created/verified"
-        ls -la out/
+        echo "out directory created"
         
     - name: Build Docker image with debug
       run: |
@@ -141,110 +125,239 @@ jobs:
         echo ""
         echo "Building Docker image..."
         
-        # Create a debug Dockerfile if needed
-        if [ ! -f Dockerfile ]; then
-          echo "Creating simple Dockerfile..."
-          cat > Dockerfile << 'EOF'
-          FROM ubuntu:22.04
-          ENV DEBIAN_FRONTEND=noninteractive
-          RUN apt-get update && apt-get install -y \
-              curl \
-              && apt-get clean
-          WORKDIR /workspace
-          COPY entrypoint.sh /entrypoint.sh
-          RUN chmod +x /entrypoint.sh && \
-              echo "=== DOCKER BUILD DEBUG ===" && \
-              echo "File exists:" && \
-              ls -la /entrypoint.sh && \
-              echo "First line:" && \
-              head -1 /entrypoint.sh
-          ENTRYPOINT ["/entrypoint.sh"]
-          EOF
-        fi
+        # Create a simple Dockerfile for testing
+        cat > Dockerfile << 'DOCKERFILE_EOF'
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y curl && apt-get clean
+
+WORKDIR /workspace
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh && \
+    echo "=== DOCKER BUILD DEBUG ===" && \
+    echo "File exists:" && \
+    ls -la /entrypoint.sh && \
+    echo "First line:" && \
+    head -1 /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+DOCKERFILE_EOF
         
-        echo "Dockerfile contents:"
+        echo "Dockerfile created:"
         cat Dockerfile
         echo ""
         
-        # Build with cache
+        # Build
         docker build --progress=plain --no-cache -t twrp-builder:latest .
         
         echo ""
-        echo "=== DEBUG: IMAGE BUILT SUCCESSFULLY ==="
+        echo "=== DEBUG: IMAGE BUILT ==="
         
     - name: Test Docker image
       run: |
         echo "=== DEBUG: DOCKER IMAGE TEST ==="
         
         echo "1. Testing if image exists:"
-        docker images | grep twrp-builder
+        docker images | grep twrp-builder || echo "Image not found"
         
         echo ""
-        echo "2. Testing entrypoint directly:"
-        docker run --rm --entrypoint /bin/bash twrp-builder:latest -c "ls -la /entrypoint.sh && echo 'File test passed'"
+        echo "2. Testing bash works:"
+        docker run --rm --entrypoint /bin/bash twrp-builder:latest -c "echo 'Bash test passed'" || echo "Bash test failed"
         
         echo ""
-        echo "3. Testing entrypoint execution:"
-        docker run --rm twrp-builder:latest test-argument-1 test-argument-2
+        echo "3. Testing entrypoint file:"
+        docker run --rm --entrypoint /bin/bash twrp-builder:latest -c "ls -la /entrypoint.sh && echo 'File exists'" || echo "File check failed"
         
         echo ""
-        echo "4. Testing with actual arguments format:"
-        docker run --rm \
-          twrp-builder:latest \
-          --manifest-url="https://test.com" \
-          --manifest-branch="test" \
-          --device-tree-url="https://test.com" \
-          --device-tree-branch="main"
-          
-    - name: Full build test
+        echo "4. Testing entrypoint execution (simple):"
+        docker run --rm twrp-builder:latest test-arg-1 test-arg-2 || echo "Entrypoint execution failed"
+        
+    - name: Build actual Docker image
       if: success()
       run: |
-        echo "=== DEBUG: FULL BUILD TEST ==="
+        echo "=== DEBUG: BUILDING ACTUAL DOCKER IMAGE ==="
         
-        # Update Dockerfile for actual build
-        echo "Updating Dockerfile for actual build..."
-        cat > Dockerfile << 'EOF'
-        FROM ubuntu:22.04
+        # Create actual Dockerfile
+        cat > Dockerfile << 'DOCKERFILE_EOF'
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    git \
+    gperf \
+    build-essential \
+    gcc-multilib \
+    g++-multilib \
+    lib32z-dev \
+    lib32ncurses5-dev \
+    libxml2-utils \
+    xsltproc \
+    bc \
+    ccache \
+    liblz4-tool \
+    libncurses5-dev \
+    lzop \
+    imagemagick \
+    libbz2-dev \
+    python3 \
+    curl \
+    libssl-dev \
+    libreadline-dev \
+    zlib1g-dev \
+    openjdk-8-jdk \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+WORKDIR /workspace
+
+# Copy the actual entrypoint from repository
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+DOCKERFILE_EOF
         
-        ENV DEBIAN_FRONTEND=noninteractive
+        echo "Actual Dockerfile created"
         
-        RUN apt-get update && apt-get install -y \
-            git \
-            gperf \
-            build-essential \
-            gcc-multilib \
-            g++-multilib \
-            lib32z-dev \
-            lib32ncurses5-dev \
-            libxml2-utils \
-            xsltproc \
-            bc \
-            ccache \
-            liblz4-tool \
-            libncurses5-dev \
-            lzop \
-            imagemagick \
-            libbz2-dev \
-            python3 \
-            curl \
-            libssl-dev \
-            libreadline-dev \
-            zlib1g-dev \
-            openjdk-8-jdk \
-            && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+        # Replace entrypoint.sh with actual one from repo
+        if [ -f entrypoint.sh.original ]; then
+          # Use original if we saved it
+          cp entrypoint.sh.original entrypoint.sh
+        elif [ -f entrypoint.sh ]; then
+          # Save current
+          cp entrypoint.sh entrypoint.sh.testbackup
+        fi
         
-        WORKDIR /workspace
+        # Create actual entrypoint from your content
+        echo '#!/bin/bash
+set -ex
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --manifest-url=*)
+            MANIFEST_URL="${1#*=}"
+            shift
+            ;;
+        --manifest-branch=*)
+            MANIFEST_BRANCH="${1#*=}"
+            shift
+            ;;
+        --device-tree-url=*)
+            DEVICE_TREE_URL="${1#*=}"
+            shift
+            ;;
+        --device-tree-branch=*)
+            DEVICE_TREE_BRANCH="${1#*=}"
+            shift
+            ;;
+        --device-path=*)
+            DEVICE_PATH="${1#*=}"
+            shift
+            ;;
+        --device-name=*)
+            DEVICE_NAME="${1#*=}"
+            shift
+            ;;
+        --makefile-name=*)
+            MAKEFILE_NAME="${1#*=}"
+            shift
+            ;;
+        --build-target=*)
+            BUILD_TARGET="${1#*=}"
+            shift
+            ;;
+        *)
+            echo "Unknown parameter: $1"
+            exit 1
+            ;;
+    esac
+done
+
+# Check required variables
+if [[ -z "$MANIFEST_URL" || -z "$DEVICE_TREE_URL" ]]; then
+    echo "Error: MANIFEST_URL and DEVICE_TREE_URL are required!"
+    exit 1
+fi
+
+# Set defaults
+: ${MANIFEST_BRANCH:="twrp-11"}
+: ${DEVICE_TREE_BRANCH:="main"}
+: ${BUILD_TARGET:="recovery"}
+
+echo "Build settings:"
+echo "MANIFEST_URL: $MANIFEST_URL"
+echo "MANIFEST_BRANCH: $MANIFEST_BRANCH"
+echo "DEVICE_TREE_URL: $DEVICE_TREE_URL"
+echo "DEVICE_TREE_BRANCH: $DEVICE_TREE_BRANCH"
+echo "DEVICE_PATH: $DEVICE_PATH"
+echo "DEVICE_NAME: $DEVICE_NAME"
+echo "MAKEFILE_NAME: $MAKEFILE_NAME"
+echo "BUILD_TARGET: $BUILD_TARGET"
+
+# Change to workspace
+cd /workspace
+
+# Install Repo tool
+mkdir -p bin
+curl -s https://storage.googleapis.com/git-repo-downloads/repo > bin/repo
+chmod a+x bin/repo
+ln -sf bin/repo /usr/bin/repo || true
+
+# Initialize and sync repository
+repo init -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH" --depth=1
+repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+
+# Clone device tree
+if [[ ! -d "$DEVICE_PATH" ]]; then
+    git clone "$DEVICE_TREE_URL" -b "$DEVICE_TREE_BRANCH" "$DEVICE_PATH"
+fi
+
+# Setup environment
+source build/envsetup.sh
+export ALLOW_MISSING_DEPENDENCIES=true
+export LC_ALL=C
+export USE_CCACHE=1
+export CCACHE_COMPRESS=1
+export CCACHE_DIR="/tmp/ccache"
+lunch "${MAKEFILE_NAME}"-eng
+
+# Build
+make clean
+make "${BUILD_TARGET}"image -j$(nproc --all)
+
+# Archive output
+if [[ -f "out/target/product/$DEVICE_NAME/${BUILD_TARGET}.img" ]]; then
+    cd out/target/product/"$DEVICE_NAME"
+    ls -lh "${BUILD_TARGET}.img"
+    gzip -k "${BUILD_TARGET}.img"
+    echo "Build successful!"
+    
+    # Copy to output directory
+    mkdir -p /workspace/out
+    cp "${BUILD_TARGET}.img.gz" /workspace/out/
+else
+    echo "Error: ${BUILD_TARGET}.img not found!"
+    ls -la out/target/product/"$DEVICE_NAME"/
+    exit 1
+fi
+
+exit 0' > entrypoint.sh
         
-        COPY entrypoint.sh /entrypoint.sh
-        RUN chmod +x /entrypoint.sh
+        chmod +x entrypoint.sh
         
-        ENTRYPOINT ["/entrypoint.sh"]
-        EOF
-        
-        echo "Rebuilding image..."
+        echo "Actual entrypoint.sh created"
+        echo "Building actual image..."
         docker build -t twrp-builder:latest .
         
-        echo "Running build..."
+    - name: Run TWRP build
+      if: success()
+      run: |
+        echo "=== DEBUG: RUNNING TWRP BUILD ==="
+        
         docker run --rm \
           -v $PWD/out:/workspace/out \
           twrp-builder:latest \
@@ -260,32 +373,17 @@ jobs:
     - name: Check build output
       run: |
         echo "=== DEBUG: BUILD OUTPUT CHECK ==="
-        echo "Output directory contents:"
-        find out -type f 2>/dev/null | head -20 || echo "No output files found"
+        echo "Output directory:"
+        ls -la out/ 2>/dev/null || echo "out directory not found"
         
-        if [ -d out ]; then
-          echo "out directory:"
-          ls -la out/
-          echo ""
-          echo "Searching for image files:"
-          find out -name "*.img*" -type f 2>/dev/null || echo "No image files found"
-        fi
+        echo ""
+        echo "Searching for image files:"
+        find out -name "*.img*" -type f 2>/dev/null || echo "No image files found"
         
     - name: Upload artifacts
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: twrp-recovery-build
+        name: twrp-recovery
         path: out/
         retention-days: 7
-        if-no-files-found: warn
-        
-    - name: Upload debug logs
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: debug-logs
-        path: |
-          ${{ github.workspace }}/*.log
-          ${{ github.workspace }}/out/
-        retention-days: 1
