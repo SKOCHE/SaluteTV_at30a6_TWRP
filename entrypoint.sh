@@ -67,13 +67,22 @@ echo "BUILD_TARGET: $BUILD_TARGET"
 # Change to workspace
 cd /workspace
 
-# Install Repo tool
-mkdir -p bin
-curl -s https://storage.googleapis.com/git-repo-downloads/repo > bin/repo
-chmod a+x bin/repo
-ln -sf bin/repo /usr/bin/repo || true
+# Install Repo tool - ИСПРАВЛЕННАЯ ЧАСТЬ
+echo "Installing Repo tool..."
+mkdir -p ~/bin
+curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+chmod a+x ~/bin/repo
+
+# Добавляем в PATH
+export PATH="$HOME/bin:$PATH"
+echo "PATH updated: $PATH"
+
+# Проверяем, что repo доступен
+which repo || echo "repo not found in PATH"
+ls -la ~/bin/repo
 
 # Initialize and sync repository
+echo "Initializing repo..."
 repo init -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH" --depth=1
 repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
 
