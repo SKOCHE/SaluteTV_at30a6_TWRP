@@ -11,7 +11,7 @@ jobs:
     - name: Set up SSH Agent
       uses: webfactory/ssh-agent@v0.8.0
       with:
-        ssh-private-key: ${{ secrets.VENDOR_SALUTE_DEPLOY_KEY }} # Use the deploy key secret
+        ssh-private-key: ${{ secrets.DEPLOY_KEY }} # Use the deploy key secret
 
     - name: Checkout Device Tree Repository
       uses: actions/checkout@v4
@@ -73,3 +73,6 @@ jobs:
       with:
         name: twrp-recovery
         path: twrp/out/target/product/at30a6/recovery.img
+
+    - name: Debugging - Print Secret Length
+      run: echo "Secret length: ${{ secrets.DEPLOY_KEY.length }}" # REMOVE THIS AFTER DEBUGGING
