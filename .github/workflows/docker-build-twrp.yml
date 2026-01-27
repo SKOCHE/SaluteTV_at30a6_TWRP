@@ -44,104 +44,38 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
       
-    - name: Use existing entrypoint.sh from repo
+    - name: Fix entrypoint.sh permissions
       run: |
-        if [ -f entrypoint.sh ]; then
-          echo "Using existing entrypoint.sh"
-          chmod +x entrypoint.sh
-        else
-          echo "Creating entrypoint.sh from your content"
-          # Простой способ без EOF - создаем поэтапно
-          echo '#!/bin/bash' > entrypoint.sh
-          echo 'set -ex' >> entrypoint.sh
-          echo '' >> entrypoint.sh
-          echo '# Parse arguments' >> entrypoint.sh
-          echo 'for arg in "$@"; do' >> entrypoint.sh
-          echo '    case $arg in' >> entrypoint.sh
-          echo '        --manifest-url=*)' >> entrypoint.sh
-          echo '            MANIFEST_URL="${arg#*=}"' >> entrypoint.sh
-          echo '            ;;' >> entrypoint.sh
-          echo '        --manifest-branch=*)' >> entrypoint.sh
-          echo '            MANIFEST_BRANCH="${arg#*=}"' >> entrypoint.sh
-          echo '            ;;' >> entrypoint.sh
-          echo '        --device-tree-url=*)' >> entrypoint.sh
-          echo '            DEVICE_TREE_URL="${arg#*=}"' >> entrypoint.sh
-          echo '            ;;' >> entrypoint.sh
-          echo '        --device-tree-branch=*)' >> entrypoint.sh
-          echo '            DEVICE_TREE_BRANCH="${arg#*=}"' >> entrypoint.sh
-          echo '            ;;' >> entrypoint.sh
-          echo '        --device-path=*)' >> entrypoint.sh
-          echo '            DEVICE_PATH="${arg#*=}"' >> entrypoint.sh
-          echo '            ;;' >> entrypoint.sh
-          echo '        --device-name=*)' >> entrypoint.sh
-          echo '            DEVICE_NAME="${arg#*=}"' >> entrypoint.sh
-          echo '            ;;' >> entrypoint.sh
-          echo '        --makefile-name=*)' >> entrypoint.sh
-          echo '            MAKEFILE_NAME="${arg#*=}"' >> entrypoint.sh
-          echo '            ;;' >> entrypoint.sh
-          echo '        --build-target=*)' >> entrypoint.sh
-          echo '            BUILD_TARGET="${arg#*=}"' >> entrypoint.sh
-          echo '            ;;' >> entrypoint.sh
-          echo '    esac' >> entrypoint.sh
-          echo 'done' >> entrypoint.sh
-          echo '' >> entrypoint.sh
-          echo '# Check required variables' >> entrypoint.sh
-          echo 'if [ -z "$MANIFEST_URL" ] || [ -z "$DEVICE_TREE_URL" ]; then' >> entrypoint.sh
-          echo '    echo "Error: MANIFEST_URL and DEVICE_TREE_URL are required!"' >> entrypoint.sh
-          echo '    exit 1' >> entrypoint.sh
-          echo 'fi' >> entrypoint.sh
-          echo '' >> entrypoint.sh
-          echo '# Set defaults' >> entrypoint.sh
-          echo 'MANIFEST_BRANCH="${MANIFEST_BRANCH:-twrp-11}"' >> entrypoint.sh
-          echo 'DEVICE_TREE_BRANCH="${DEVICE_TREE_BRANCH:-main}"' >> entrypoint.sh
-          echo 'BUILD_TARGET="${BUILD_TARGET:-recovery}"' >> entrypoint.sh
-          echo '' >> entrypoint.sh
-          echo 'echo "Build settings:"' >> entrypoint.sh
-          echo 'echo "MANIFEST_URL: $MANIFEST_URL"' >> entrypoint.sh
-          echo 'echo "MANIFEST_BRANCH: $MANIFEST_BRANCH"' >> entrypoint.sh
-          echo 'echo "DEVICE_TREE_URL: $DEVICE_TREE_URL"' >> entrypoint.sh
-          echo 'echo "DEVICE_TREE_BRANCH: $DEVICE_TREE_BRANCH"' >> entrypoint.sh
-          echo 'echo "DEVICE_PATH: $DEVICE_PATH"' >> entrypoint.sh
-          echo 'echo "DEVICE_NAME: $DEVICE_NAME"' >> entrypoint.sh
-          echo 'echo "MAKEFILE_NAME: $MAKEFILE_NAME"' >> entrypoint.sh
-          echo 'echo "BUILD_TARGET: $BUILD_TARGET"' >> entrypoint.sh
-          echo '' >> entrypoint.sh
-          echo '# Build logic here' >> entrypoint.sh
-          echo 'echo "Build would start here..."' >> entrypoint.sh
-          echo '' >> entrypoint.sh
-          echo '# Create dummy output for test' >> entrypoint.sh
-          echo 'mkdir -p out/target/product/$DEVICE_NAME' >> entrypoint.sh
-          echo 'echo "Test recovery image" > out/target/product/$DEVICE_NAME/recovery.img' >> entrypoint.sh
-          echo 'gzip out/target/product/$DEVICE_NAME/recovery.img' >> entrypoint.sh
-          echo 'mkdir -p /workspace/out' >> entrypoint.sh
-          echo 'cp out/target/product/$DEVICE_NAME/recovery.img.gz /workspace/out/' >> entrypoint.sh
-          echo '' >> entrypoint.sh
-          echo 'echo "Build complete!"' >> entrypoint.sh
-          echo 'exit 0' >> entrypoint.sh
-          
-          chmod +x entrypoint.sh
-        fi
-        
-    - name: Create Dockerfile if missing
-      run: |
-        if [ ! -f Dockerfile ]; then
-          echo 'FROM ubuntu:22.04' > Dockerfile
-          echo 'ENV DEBIAN_FRONTEND=noninteractive' >> Dockerfile
-          echo 'RUN apt-get update && apt-get install -y curl' >> Dockerfile
-          echo 'WORKDIR /workspace' >> Dockerfile
-          echo 'COPY entrypoint.sh /entrypoint.sh' >> Dockerfile
-          echo 'RUN chmod +x /entrypoint.sh' >> Dockerfile
-          echo 'ENTRYPOINT ["/entrypoint.sh"]' >> Dockerfile
-        fi
+        echo "=== FIXING ENTRYPOINT ==="
+        # Убираем Windows окончания строк (CRLF -> LF)
+        sed -i 's/\r$//' entrypoint.sh
+        # Делаем исполняемым
+        chmod +x entrypoint.sh
+        # Проверяем
+        ls -la entrypoint.sh
+        echo "File type:"
+        file entrypoint.sh
         
     - name: Build Docker image
-      run: docker build -t twrp-builder:latest .
-      
+      run: |
+        echo "=== BUILDING DOCKER IMAGE ==="
+        docker build -t twrp-builder:latest .
+        
+    - name: Test Docker image
+      run: |
+        echo "=== TESTING DOCKER ==="
+        echo "1. File check:"
+        docker run --rm --entrypoint /bin/bash twrp-builder:latest -c "ls -la /entrypoint.sh && file /entrypoint.sh"
+        echo ""
+        echo "2. Test run:"
+        docker run --rm twrp-builder:latest --help || echo "Test completed"
+        
     - name: Create output directory
       run: mkdir -p out
       
-    - name: Run build
+    - name: Run TWRP build
       run: |
+        echo "=== RUNNING BUILD ==="
         docker run --rm \
           -v $PWD/out:/workspace/out \
           twrp-builder:latest \
@@ -154,8 +88,16 @@ jobs:
           --makefile-name="${{ github.event.inputs.MAKEFILE_NAME }}" \
           --build-target="${{ github.event.inputs.BUILD_TARGET }}"
           
+    - name: Check output
+      run: |
+        echo "=== CHECKING OUTPUT ==="
+        ls -la out/ || echo "No output directory"
+        find out -type f 2>/dev/null || echo "No files found"
+        
     - name: Upload artifacts
+      if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: twrp-build
+        name: twrp-recovery
         path: out/
+        retention-days: 7
