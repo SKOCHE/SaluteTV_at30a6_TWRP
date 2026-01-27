@@ -29,7 +29,6 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /workspace
 
-# Копируем entrypoint.sh из контекста сборки
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
