@@ -27,9 +27,19 @@ RUN apt-get update && apt-get install -y \
     openjdk-8-jdk \
     && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
+# Установим dos2unix для конвертации концов строк
+RUN apt-get update && apt-get install -y dos2unix && apt-get clean
+
 WORKDIR /workspace
 
+# Копируем entrypoint.sh и исправляем концы строк
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN dos2unix /entrypoint.sh && \
+    chmod 755 /entrypoint.sh && \
+    echo "=== ПРОВЕРКА ФАЙЛА ===" && \
+    ls -la /entrypoint.sh && \
+    file /entrypoint.sh && \
+    echo "=== ПЕРВЫЕ 10 СТРОК ===" && \
+    head -10 /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
