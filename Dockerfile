@@ -28,7 +28,14 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 WORKDIR /workspace
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-ENTRYPOINT ["/bin/bash", "/entrypoint.sh"]
 
+COPY entrypoint.sh /entrypoint.sh
+
+RUN sed -i 's/\r$//' /entrypoint.sh && \
+    chmod +x /entrypoint.sh && \
+    echo "=== ПРОВЕРКА ===" && \
+    ls -la /entrypoint.sh && \
+    file /entrypoint.sh && \
+    head -1 /entrypoint.sh
+
+ENTRYPOINT ["/bin/bash", "/entrypoint.sh"]
