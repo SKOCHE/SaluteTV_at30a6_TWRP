@@ -1,0 +1,70 @@
+name: Recovery Build for SaluteTV AT30A6
+
+on:
+  workflow_dispatch:
+    inputs:
+      MANIFEST_URL:
+        description: 'TWRP manifest URL'
+        required: true
+        default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp'
+      MANIFEST_BRANCH:
+        description: 'TWRP manifest branch'
+        required: true
+        default: 'twrp-11'
+      DEVICE_TREE_URL:
+        description: 'Device tree repository URL'
+        required: true
+        default: 'https://github.com/SKOCHE/SaluteTV_at30a6_TWRP'
+      DEVICE_TREE_BRANCH:
+        description: 'Device tree branch'
+        required: true
+        default: 'main'
+      DEVICE_PATH:
+        description: 'Device path in device tree'
+        required: true
+        default: 'device/salute/at30a6'
+      DEVICE_NAME:
+        description: 'Device name'
+        required: true
+        default: 'at30a6'
+      MAKEFILE_NAME:
+        description: 'Makefile name'
+        required: true
+        default: 'twrp_at30a6'
+      BUILD_TARGET:
+        description: 'Build target'
+        required: true
+        default: 'recovery'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    container:
+      image: my_docker_image:latest
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+
+    - name: Copy Dockerfile & Scripts
+      run: cp Dockerfile entrypoint.sh .
+
+    - name: Build Docker Image
+      run: docker build -t my_docker_image:latest .
+
+    - name: Run Docker Container
+      run: |
+        docker run --rm -v $(pwd)/out:/workspace/out my_docker_image:latest \
+            --manifest-url=${{ github.event.inputs.MANIFEST_URL }} \
+            --manifest-branch=${{ github.event.inputs.MANIFEST_BRANCH }} \
+            --device-tree-url=${{ github.event.inputs.DEVICE_TREE_URL }} \
+            --device-tree-branch=${{ github.event.inputs.DEVICE_TREE_BRANCH }} \
+            --device-path=${{ github.event.inputs.DEVICE_PATH }} \
+            --device-name=${{ github.event.inputs.DEVICE_NAME }} \
+            --makefile-name=${{ github.event.inputs.MAKEFILE_NAME }} \
+            --build-target=${{ github.event.inputs.BUILD_TARGET }}
+
+    - name: Archive Build Artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: twrp-recovery
+        path: out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img.gz
