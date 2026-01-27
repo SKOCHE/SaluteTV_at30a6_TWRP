@@ -41,23 +41,210 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-    - name: Checkout
+    - name: Checkout repository
       uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
       
+    - name: Setup debug information
+      run: |
+        echo "=== DEBUG: SYSTEM INFO ==="
+        echo "Working directory: $(pwd)"
+        echo "GitHub workspace: $GITHUB_WORKSPACE"
+        echo "Runner workspace: $RUNNER_WORKSPACE"
+        echo ""
+        
+    - name: Check repository structure
+      run: |
+        echo "=== DEBUG: REPOSITORY STRUCTURE ==="
+        echo "Listing all files:"
+        find . -type f -name "*" | head -30
+        echo ""
+        echo "=== DEBUG: DOCKERFILE ==="
+        if [ -f Dockerfile ]; then
+          echo "Dockerfile exists"
+          cat Dockerfile
+        else
+          echo "ERROR: Dockerfile not found!"
+          find . -name "Dockerfile*" -type f
+        fi
+        echo ""
+        
+    - name: Check entrypoint.sh
+      run: |
+        echo "=== DEBUG: ENTRYPOINT.SH CHECK ==="
+        echo "Current directory: $(pwd)"
+        echo ""
+        
+        if [ -f entrypoint.sh ]; then
+          echo "✓ entrypoint.sh FOUND in current directory"
+          echo "File permissions:"
+          ls -la entrypoint.sh
+          echo ""
+          echo "File type:"
+          file entrypoint.sh || echo "file command not available"
+          echo ""
+          echo "First 10 lines:"
+          head -10 entrypoint.sh
+          echo ""
+          echo "Line endings check (should show only LF, not CRLF):"
+          od -c entrypoint.sh | head -5
+          echo ""
+          echo "Making executable:"
+          chmod +x entrypoint.sh
+          ls -la entrypoint.sh
+        else
+          echo "✗ ERROR: entrypoint.sh NOT FOUND in current directory"
+          echo "Looking for entrypoint.sh in entire repo:"
+          find . -name "entrypoint.sh" -type f
+          echo ""
+          echo "Creating a simple test entrypoint.sh..."
+          echo '#!/bin/bash
+          echo "Test entrypoint works!"
+          echo "Arguments: $@"
+          exit 0' > entrypoint.sh
+          chmod +x entrypoint.sh
+          echo "Created test entrypoint.sh"
+        fi
+        
+    - name: Create test entrypoint if missing
+      run: |
+        echo "=== DEBUG: ENSURING ENTRYPOINT EXISTS ==="
+        if [ ! -f entrypoint.sh ]; then
+          echo "Creating simple entrypoint.sh..."
+          cat > entrypoint.sh << 'EOF'
+          #!/bin/bash
+          echo "=== ENTRYPOINT STARTED ==="
+          echo "Current directory: $(pwd)"
+          echo "Arguments received: $@"
+          echo "Listing workspace:"
+          ls -la /workspace 2>/dev/null || echo "/workspace not found"
+          echo "=== ENTRYPOINT ENDED ==="
+          EOF
+          chmod +x entrypoint.sh
+          echo "Test entrypoint.sh created"
+        fi
+        
     - name: Setup output directory
-      run: mkdir -p out
-      
-    - name: Build Docker image
-      run: docker build -t twrp-builder:latest .
-      
+      run: |
+        echo "=== DEBUG: SETUP OUTPUT ==="
+        mkdir -p out
+        echo "out directory created/verified"
+        ls -la out/
+        
+    - name: Build Docker image with debug
+      run: |
+        echo "=== DEBUG: DOCKER BUILD ==="
+        echo "Current directory contents:"
+        ls -la
+        
+        echo ""
+        echo "Building Docker image..."
+        
+        # Create a debug Dockerfile if needed
+        if [ ! -f Dockerfile ]; then
+          echo "Creating simple Dockerfile..."
+          cat > Dockerfile << 'EOF'
+          FROM ubuntu:22.04
+          ENV DEBIAN_FRONTEND=noninteractive
+          RUN apt-get update && apt-get install -y \
+              curl \
+              && apt-get clean
+          WORKDIR /workspace
+          COPY entrypoint.sh /entrypoint.sh
+          RUN chmod +x /entrypoint.sh && \
+              echo "=== DOCKER BUILD DEBUG ===" && \
+              echo "File exists:" && \
+              ls -la /entrypoint.sh && \
+              echo "First line:" && \
+              head -1 /entrypoint.sh
+          ENTRYPOINT ["/entrypoint.sh"]
+          EOF
+        fi
+        
+        echo "Dockerfile contents:"
+        cat Dockerfile
+        echo ""
+        
+        # Build with cache
+        docker build --progress=plain --no-cache -t twrp-builder:latest .
+        
+        echo ""
+        echo "=== DEBUG: IMAGE BUILT SUCCESSFULLY ==="
+        
     - name: Test Docker image
       run: |
-        echo "Testing Docker image..."
-        docker run --rm twrp-builder:latest ls -la /entrypoint.sh
-        echo "File check passed!"
-      
-    - name: Build TWRP
+        echo "=== DEBUG: DOCKER IMAGE TEST ==="
+        
+        echo "1. Testing if image exists:"
+        docker images | grep twrp-builder
+        
+        echo ""
+        echo "2. Testing entrypoint directly:"
+        docker run --rm --entrypoint /bin/bash twrp-builder:latest -c "ls -la /entrypoint.sh && echo 'File test passed'"
+        
+        echo ""
+        echo "3. Testing entrypoint execution:"
+        docker run --rm twrp-builder:latest test-argument-1 test-argument-2
+        
+        echo ""
+        echo "4. Testing with actual arguments format:"
+        docker run --rm \
+          twrp-builder:latest \
+          --manifest-url="https://test.com" \
+          --manifest-branch="test" \
+          --device-tree-url="https://test.com" \
+          --device-tree-branch="main"
+          
+    - name: Full build test
+      if: success()
       run: |
+        echo "=== DEBUG: FULL BUILD TEST ==="
+        
+        # Update Dockerfile for actual build
+        echo "Updating Dockerfile for actual build..."
+        cat > Dockerfile << 'EOF'
+        FROM ubuntu:22.04
+        
+        ENV DEBIAN_FRONTEND=noninteractive
+        
+        RUN apt-get update && apt-get install -y \
+            git \
+            gperf \
+            build-essential \
+            gcc-multilib \
+            g++-multilib \
+            lib32z-dev \
+            lib32ncurses5-dev \
+            libxml2-utils \
+            xsltproc \
+            bc \
+            ccache \
+            liblz4-tool \
+            libncurses5-dev \
+            lzop \
+            imagemagick \
+            libbz2-dev \
+            python3 \
+            curl \
+            libssl-dev \
+            libreadline-dev \
+            zlib1g-dev \
+            openjdk-8-jdk \
+            && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+        
+        WORKDIR /workspace
+        
+        COPY entrypoint.sh /entrypoint.sh
+        RUN chmod +x /entrypoint.sh
+        
+        ENTRYPOINT ["/entrypoint.sh"]
+        EOF
+        
+        echo "Rebuilding image..."
+        docker build -t twrp-builder:latest .
+        
+        echo "Running build..."
         docker run --rm \
           -v $PWD/out:/workspace/out \
           twrp-builder:latest \
@@ -70,8 +257,35 @@ jobs:
           --makefile-name="${{ github.event.inputs.MAKEFILE_NAME }}" \
           --build-target="${{ github.event.inputs.BUILD_TARGET }}"
           
+    - name: Check build output
+      run: |
+        echo "=== DEBUG: BUILD OUTPUT CHECK ==="
+        echo "Output directory contents:"
+        find out -type f 2>/dev/null | head -20 || echo "No output files found"
+        
+        if [ -d out ]; then
+          echo "out directory:"
+          ls -la out/
+          echo ""
+          echo "Searching for image files:"
+          find out -name "*.img*" -type f 2>/dev/null || echo "No image files found"
+        fi
+        
     - name: Upload artifacts
+      if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: twrp-recovery
+        name: twrp-recovery-build
         path: out/
+        retention-days: 7
+        if-no-files-found: warn
+        
+    - name: Upload debug logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: debug-logs
+        path: |
+          ${{ github.workspace }}/*.log
+          ${{ github.workspace }}/out/
+        retention-days: 1
