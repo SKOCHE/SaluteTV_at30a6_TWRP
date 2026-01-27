@@ -63,17 +63,26 @@ jobs:
         echo "Build Target: ${{ github.event.inputs.BUILD_TARGET }}.img"
         echo "::endgroup::"
 
+    - name: Clean disk space before build
+      run: |
+        echo "=== Cleaning disk space ==="
+        df -h
+        sudo apt clean
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/lib/android /usr/local/lib/node_modules
+        sudo rm -rf /var/lib/apt/lists/*
+        df -h
+
     - name: Check Out
       uses: actions/checkout@v3
 
     - name: Prepare the environment for Ubuntu 22.04
       run: |
         sudo apt update
-        sudo apt -y upgrade
         sudo apt -y install git gperf build-essential gcc-multilib ccache chrpath gawk flex bison python3 \
           libncurses5-dev x11proto-core-dev libx11-dev libgl1-mesa-dev \
           zip lzop pngcrush imagemagick libbz2-dev rsync bc \
           openjdk-8-jdk libxml2-utils xsltproc
+        # Убираем upgrade чтобы не забивать диск
 
     - name: Install OpenJDK 8
       run: |
@@ -103,9 +112,9 @@ jobs:
         repo init --depth=1 -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }}
       id: pwd
 
-    - name: Repo Sync
+    - name: Repo Sync (minimal)
       run: |
-        repo sync -j$(nproc --all) --force-sync
+        repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle --current-branch --depth=1
       working-directory: workspace
 
     - name: Clone device tree
@@ -119,6 +128,16 @@ jobs:
         && github.event.inputs.COMMON_PATH != null
       run: |
         git clone ${{ github.event.inputs.COMMON_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.COMMON_PATH }}
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
+    - name: Remove unnecessary sources to save space
+      run: |
+        cd workspace
+        echo "=== Removing unnecessary source directories ==="
+        # Удаляем большие директории которые не нужны для recovery
+        rm -rf art bionic dalvik development external/rust frameworks/av frameworks/native hardware kernel prebuilts system/sepolicy 2>/dev/null || true
+        echo "Space after cleanup:"
+        du -sh . || true
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Check Build Tree
@@ -140,7 +159,7 @@ jobs:
     - name: Sync Device Dependencies
       run: |
         bash ${GITHUB_WORKSPACE}/scripts/convert.sh ${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies
-        repo sync -j$(nproc --all)
+        repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle --current-branch --depth=1
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
       continue-on-error: true
 
