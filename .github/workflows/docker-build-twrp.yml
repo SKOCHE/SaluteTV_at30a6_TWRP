@@ -39,27 +39,47 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    
     steps:
     - name: Checkout Repository
       uses: actions/checkout@v3
-
+      
+    - name: Create output directory
+      run: mkdir -p out
+      
     - name: Build Docker Image
       run: docker build -t my_docker_image:latest .
-
+      
+    - name: Debug Docker Image
+      run: |
+        echo "Проверка образа:"
+        docker run --rm my_docker_image:latest ls -la /
+        docker run --rm my_docker_image:latest ls -la /entrypoint.sh
+        docker run --rm my_docker_image:latest head -20 /entrypoint.sh
+      
     - name: Run Docker Container
       run: |
-        docker run --rm -v $(pwd)/out:/workspace/out my_docker_image:latest \
-            --manifest-url=${{ github.event.inputs.MANIFEST_URL }} \
-            --manifest-branch=${{ github.event.inputs.MANIFEST_BRANCH }} \
-            --device-tree-url=${{ github.event.inputs.DEVICE_TREE_URL }} \
-            --device-tree-branch=${{ github.event.inputs.DEVICE_TREE_BRANCH }} \
-            --device-path=${{ github.event.inputs.DEVICE_PATH }} \
-            --device-name=${{ github.event.inputs.DEVICE_NAME }} \
-            --makefile-name=${{ github.event.inputs.MAKEFILE_NAME }} \
-            --build-target=${{ github.event.inputs.BUILD_TARGET }}
-
+        docker run --rm \
+          -v $PWD/out:/workspace/out \
+          my_docker_image:latest \
+          --manifest-url="${{ github.event.inputs.MANIFEST_URL }}" \
+          --manifest-branch="${{ github.event.inputs.MANIFEST_BRANCH }}" \
+          --device-tree-url="${{ github.event.inputs.DEVICE_TREE_URL }}" \
+          --device-tree-branch="${{ github.event.inputs.DEVICE_TREE_BRANCH }}" \
+          --device-path="${{ github.event.inputs.DEVICE_PATH }}" \
+          --device-name="${{ github.event.inputs.DEVICE_NAME }}" \
+          --makefile-name="${{ github.event.inputs.MAKEFILE_NAME }}" \
+          --build-target="${{ github.event.inputs.BUILD_TARGET }}"
+          
+    - name: Check output
+      run: |
+        echo "Содержимое out:"
+        ls -la out/
+        find out -type f -name "*.img*" | head -5
+      
     - name: Archive Build Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: twrp-recovery
-        path: out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img.gz
+        path: out/
+        retention-days: 7
