@@ -44,35 +44,29 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
       
-    - name: Create entrypoint.sh
+    - name: Create simple entrypoint
       run: |
-        cat > entrypoint.sh << 'EOF'
-#!/bin/bash
-echo "Starting build script"
-echo "Arguments: $@"
-exit 0
-EOF
+        echo '#!/bin/bash' > entrypoint.sh
+        echo 'echo "Starting entrypoint"' >> entrypoint.sh
+        echo 'echo "Args: $@"' >> entrypoint.sh
+        echo 'exit 0' >> entrypoint.sh
         chmod +x entrypoint.sh
         
-    - name: Create Dockerfile
+    - name: Create simple Dockerfile
       run: |
-        cat > Dockerfile << 'EOF'
-FROM ubuntu:22.04
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y curl && apt-get clean
-WORKDIR /workspace
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-ENTRYPOINT ["/entrypoint.sh"]
-EOF
+        echo 'FROM ubuntu:22.04' > Dockerfile
+        echo 'ENV DEBIAN_FRONTEND=noninteractive' >> Dockerfile
+        echo 'RUN apt-get update && apt-get install -y curl' >> Dockerfile
+        echo 'WORKDIR /workspace' >> Dockerfile
+        echo 'COPY entrypoint.sh /entrypoint.sh' >> Dockerfile
+        echo 'RUN chmod +x /entrypoint.sh' >> Dockerfile
+        echo 'ENTRYPOINT ["/entrypoint.sh"]' >> Dockerfile
         
     - name: Build Docker image
       run: docker build -t twrp-builder:latest .
       
-    - name: Test Docker image
-      run: |
-        echo "Testing Docker image..."
-        docker run --rm twrp-builder:latest test
+    - name: Test Docker
+      run: docker run --rm twrp-builder:latest test
         
     - name: Create output directory
       run: mkdir -p out
