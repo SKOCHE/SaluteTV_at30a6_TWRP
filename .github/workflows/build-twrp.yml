@@ -63,7 +63,7 @@ jobs:
         make recoveryimage
 
     - name: Upload Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: twrp-recovery
         path: twrp/out/target/product/at30a6/recovery.img
