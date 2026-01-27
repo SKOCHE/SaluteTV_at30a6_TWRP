@@ -44,30 +44,158 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
       
-    - name: Create simple entrypoint
+    - name: Create entrypoint.sh
       run: |
-        echo '#!/bin/bash' > entrypoint.sh
-        echo 'echo "Starting entrypoint"' >> entrypoint.sh
-        echo 'echo "Args: $@"' >> entrypoint.sh
-        echo 'exit 0' >> entrypoint.sh
+        cat > entrypoint.sh << 'EOF'
+#!/bin/bash
+set -ex
+
+# Parse arguments
+for arg in "$@"; do
+    case $arg in
+        --manifest-url=*)
+            MANIFEST_URL="${arg#*=}"
+            ;;
+        --manifest-branch=*)
+            MANIFEST_BRANCH="${arg#*=}"
+            ;;
+        --device-tree-url=*)
+            DEVICE_TREE_URL="${arg#*=}"
+            ;;
+        --device-tree-branch=*)
+            DEVICE_TREE_BRANCH="${arg#*=}"
+            ;;
+        --device-path=*)
+            DEVICE_PATH="${arg#*=}"
+            ;;
+        --device-name=*)
+            DEVICE_NAME="${arg#*=}"
+            ;;
+        --makefile-name=*)
+            MAKEFILE_NAME="${arg#*=}"
+            ;;
+        --build-target=*)
+            BUILD_TARGET="${arg#*=}"
+            ;;
+    esac
+done
+
+# Check required variables
+if [ -z "$MANIFEST_URL" ] || [ -z "$DEVICE_TREE_URL" ]; then
+    echo "Error: MANIFEST_URL and DEVICE_TREE_URL are required!"
+    exit 1
+fi
+
+# Set defaults
+MANIFEST_BRANCH="${MANIFEST_BRANCH:-twrp-11}"
+DEVICE_TREE_BRANCH="${DEVICE_TREE_BRANCH:-main}"
+BUILD_TARGET="${BUILD_TARGET:-recovery}"
+
+echo "Build settings:"
+echo "MANIFEST_URL: $MANIFEST_URL"
+echo "MANIFEST_BRANCH: $MANIFEST_BRANCH"
+echo "DEVICE_TREE_URL: $DEVICE_TREE_URL"
+echo "DEVICE_TREE_BRANCH: $DEVICE_TREE_BRANCH"
+echo "DEVICE_PATH: $DEVICE_PATH"
+echo "DEVICE_NAME: $DEVICE_NAME"
+echo "MAKEFILE_NAME: $MAKEFILE_NAME"
+echo "BUILD_TARGET: $BUILD_TARGET"
+
+# Change to workspace
+cd /workspace
+
+# Install Repo tool
+mkdir -p bin
+curl -s https://storage.googleapis.com/git-repo-downloads/repo > bin/repo
+chmod a+x bin/repo
+ln -sf bin/repo /usr/bin/repo || true
+
+# Initialize and sync repository
+repo init -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH" --depth=1
+repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+
+# Clone device tree
+if [ ! -d "$DEVICE_PATH" ]; then
+    git clone "$DEVICE_TREE_URL" -b "$DEVICE_TREE_BRANCH" "$DEVICE_PATH"
+fi
+
+# Setup environment
+source build/envsetup.sh
+export ALLOW_MISSING_DEPENDENCIES=true
+export LC_ALL=C
+export USE_CCACHE=1
+export CCACHE_COMPRESS=1
+export CCACHE_DIR="/tmp/ccache"
+lunch "${MAKEFILE_NAME}"-eng
+
+# Build
+make clean
+make "${BUILD_TARGET}"image -j$(nproc --all)
+
+# Archive output
+if [ -f "out/target/product/$DEVICE_NAME/${BUILD_TARGET}.img" ]; then
+    cd out/target/product/"$DEVICE_NAME"
+    ls -lh "${BUILD_TARGET}.img"
+    gzip -k "${BUILD_TARGET}.img"
+    echo "Build successful!"
+    
+    # Copy to output directory
+    mkdir -p /workspace/out
+    cp "${BUILD_TARGET}.img.gz" /workspace/out/
+else
+    echo "Error: ${BUILD_TARGET}.img not found!"
+    ls -la out/target/product/"$DEVICE_NAME"/
+    exit 1
+fi
+
+exit 0
+EOF
+        
         chmod +x entrypoint.sh
         
-    - name: Create simple Dockerfile
+    - name: Create Dockerfile
       run: |
-        echo 'FROM ubuntu:22.04' > Dockerfile
-        echo 'ENV DEBIAN_FRONTEND=noninteractive' >> Dockerfile
-        echo 'RUN apt-get update && apt-get install -y curl' >> Dockerfile
-        echo 'WORKDIR /workspace' >> Dockerfile
-        echo 'COPY entrypoint.sh /entrypoint.sh' >> Dockerfile
-        echo 'RUN chmod +x /entrypoint.sh' >> Dockerfile
-        echo 'ENTRYPOINT ["/entrypoint.sh"]' >> Dockerfile
+        cat > Dockerfile << 'EOF'
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    git \
+    gperf \
+    build-essential \
+    gcc-multilib \
+    g++-multilib \
+    lib32z-dev \
+    lib32ncurses5-dev \
+    libxml2-utils \
+    xsltproc \
+    bc \
+    ccache \
+    liblz4-tool \
+    libncurses5-dev \
+    lzop \
+    imagemagick \
+    libbz2-dev \
+    python3 \
+    curl \
+    libssl-dev \
+    libreadline-dev \
+    zlib1g-dev \
+    openjdk-8-jdk \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+WORKDIR /workspace
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+EOF
         
     - name: Build Docker image
       run: docker build -t twrp-builder:latest .
       
-    - name: Test Docker
-      run: docker run --rm twrp-builder:latest test
-        
     - name: Create output directory
       run: mkdir -p out
       
@@ -85,8 +213,16 @@ jobs:
           --makefile-name="${{ github.event.inputs.MAKEFILE_NAME }}" \
           --build-target="${{ github.event.inputs.BUILD_TARGET }}"
           
+    - name: Check output
+      run: |
+        echo "=== BUILD OUTPUT ==="
+        ls -la out/ || echo "out directory not found"
+        find out -name "*.img*" -type f 2>/dev/null || echo "No image files found"
+        
     - name: Upload artifacts
+      if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: twrp-build
+        name: twrp-recovery
         path: out/
+        retention-days: 7
