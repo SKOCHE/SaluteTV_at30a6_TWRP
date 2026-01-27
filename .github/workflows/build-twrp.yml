@@ -23,12 +23,6 @@ on:
         description: 'Device path in device tree'
         required: true
         default: 'device/salute/at30a6'
-      COMMON_TREE_URL:
-        description: 'Common tree URL (if exists)'
-        required: false
-      COMMON_PATH:
-        description: 'Common tree path (if exists)'
-        required: false
       DEVICE_NAME:
         description: 'Device name'
         required: true
@@ -45,56 +39,28 @@ on:
 jobs:
   build:
     if: github.event.repository.owner.id == github.event.sender.id
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-20.04  # Используем 20.04 как в рабочем примере
     permissions:
       contents: write
 
     steps:
-    - name: Display Run Parameters
-      run: |
-        echo "::group::Build Parameters"
-        echo "Manifest URL: ${{ github.event.inputs.MANIFEST_URL }}"
-        echo "Manifest Branch: ${{ github.event.inputs.MANIFEST_BRANCH }}"
-        echo "Device Tree URL: ${{ github.event.inputs.DEVICE_TREE_URL }}"
-        echo "Device Tree Branch: ${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
-        echo "Device Path: ${{ github.event.inputs.DEVICE_PATH }}"
-        echo "Device Name: ${{ github.event.inputs.DEVICE_NAME }}"
-        echo "Makefile Name: ${{ github.event.inputs.MAKEFILE_NAME }}"
-        echo "Build Target: ${{ github.event.inputs.BUILD_TARGET }}.img"
-        echo "::endgroup::"
-
-    - name: Clean disk space before build
-      run: |
-        echo "=== Cleaning disk space ==="
-        df -h
-        sudo apt clean
-        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/lib/android /usr/local/lib/node_modules
-        sudo rm -rf /var/lib/apt/lists/*
-        df -h
-
     - name: Check Out
       uses: actions/checkout@v3
 
-    - name: Prepare the environment for Ubuntu 22.04
+    - name: Cleanup Workspace
+      uses: rokibhasansagar/slimhub_actions@main
+
+    - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt -y install git gperf build-essential gcc-multilib ccache chrpath gawk flex bison python3 \
-          libncurses5-dev x11proto-core-dev libx11-dev libgl1-mesa-dev \
-          zip lzop pngcrush imagemagick libbz2-dev rsync bc \
-          openjdk-8-jdk libxml2-utils xsltproc
-        # Убираем upgrade чтобы не забивать диск
-
+        sudo apt -y install git gperf build-essential gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib libc6-dev lib32ncurses5-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libwxgtk3.0-gtk3-dev libxml2 lzop pngcrush schedtool squashfs-tools imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses5 python3
+      
     - name: Install OpenJDK 8
-      run: |
-        sudo apt-get install openjdk-8-jdk -y
-        java -version
-
-    - name: Setup SSH Keys
-      if: ${{ startsWith(github.event.inputs.MANIFEST_URL, 'git@github.com') }}
-      uses: webfactory/ssh-agent@v0.5.4
+      uses: actions/setup-java@v3
       with:
-          ssh-private-key: |
-              ${{ secrets.SSH_PRIVATE_KEY }}
+        distribution: 'zulu'
+        java-version: '8'
+
     - name: Install repo
       run: |
         mkdir ~/bin
@@ -106,62 +72,20 @@ jobs:
       run: |
         mkdir workspace
         cd workspace
-        echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
-        git config --global user.name "Nico170420"
-        git config --global user.email "b170420nc@gmail.com"
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
         repo init --depth=1 -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }}
       id: pwd
 
-    - name: Repo Sync (minimal)
+    - name: Repo Sync
       run: |
-        repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle --current-branch
+        repo sync -j$(nproc --all) --force-sync
       working-directory: workspace
 
     - name: Clone device tree
       run: |
         git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
-    - name: Clone common tree
-      if: |
-        github.event.inputs.COMMON_TREE_URL != null
-        && github.event.inputs.COMMON_PATH != null
-      run: |
-        git clone ${{ github.event.inputs.COMMON_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.COMMON_PATH }}
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
-    - name: Remove unnecessary sources to save space
-      run: |
-        cd workspace
-        echo "=== Removing unnecessary source directories ==="
-        # Удаляем большие директории которые не нужны для recovery
-        rm -rf art bionic dalvik development external/rust frameworks/av frameworks/native hardware kernel prebuilts system/sepolicy 2>/dev/null || true
-        echo "Space after cleanup:"
-        du -sh . || true
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
-    - name: Check Build Tree
-      uses: haya14busa/action-cond@v1
-      id: buildtree
-      with:
-        cond: ${{ github.event.inputs.MANIFEST_BRANCH == 'twrp-11' || github.event.inputs.MANIFEST_BRANCH == 'twrp-12.1' }}
-        if_true: twrp
-        if_false: omni
-
-    - name: Fix Android.bp DTW flag error
-      run: |
-        cd workspace
-        echo "Fixing DTW_USE_KEY_CODE_TOUCH_SYNC flag in Android.bp..."
-        sed -i 's/DTW_USE_KEY_CODE_TOUCH_SYNC=0/-DTW_USE_KEY_CODE_TOUCH_SYNC=0/g' bootable/recovery/gui/Android.bp
-        echo "Flag fixed"
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
-    - name: Sync Device Dependencies
-      run: |
-        bash ${GITHUB_WORKSPACE}/scripts/convert.sh ${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies
-        repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle --current-branch
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-      continue-on-error: true
 
     - name: Set Swap Space
       uses: pierotofy/set-swap-space@master
@@ -170,10 +94,13 @@ jobs:
 
     - name: Building recovery
       run: |
+        cd workspace
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng && make clean && make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+        export LC_ALL=C
+        lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng
+        make clean
+        make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
 
     - name: Upload to Release
       uses: softprops/action-gh-release@v1
@@ -182,6 +109,7 @@ jobs:
         name: ${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
         tag_name: ${{ github.run_id }}
         body: |
+          TWRP Recovery for SaluteTV AT30A6
           Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}
           Device: ${{ github.event.inputs.DEVICE_NAME }}
           Target: ${{ github.event.inputs.BUILD_TARGET }}.img
