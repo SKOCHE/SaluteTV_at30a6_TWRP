@@ -29,15 +29,8 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /workspace
 
-# ДЕБАГ: показываем, что копируем
 COPY entrypoint.sh /entrypoint.sh
-RUN echo "=== ДЕБАГ В DOCKERFILE ===" && \
-    echo "Файл скопирован?" && \
-    ls -la /entrypoint.sh && \
-    echo "Первые 5 строк:" && \
-    head -5 /entrypoint.sh && \
-    chmod +x /entrypoint.sh && \
-    echo "Права:" && \
-    ls -la /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-ENTRYPOINT ["/entrypoint.sh"]
+# ИСПРАВЛЕНИЕ: Используем bash для запуска
+ENTRYPOINT ["/bin/bash", "/entrypoint.sh"]
