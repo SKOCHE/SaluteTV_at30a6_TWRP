@@ -44,21 +44,47 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v3
       
+    - name: Проверка файлов в репозитории
+      run: |
+        echo "=== СОДЕРЖИМОЕ РЕПОЗИТОРИЯ ==="
+        ls -la
+        echo ""
+        echo "=== ПРОВЕРКА ENTRYPOINT.SH ==="
+        ls -la entrypoint.sh
+        file entrypoint.sh
+        echo ""
+        echo "=== ПЕРВЫЕ 10 СТРОК ==="
+        head -10 entrypoint.sh
+        echo ""
+        echo "=== КОНЦЫ СТРОК ==="
+        od -c entrypoint.sh | head -20
+      
     - name: Create output directory
       run: mkdir -p out
       
     - name: Build Docker Image
-      run: docker build -t my_docker_image:latest .
-      
-    - name: Debug Docker Image
       run: |
-        echo "Проверка образа:"
-        docker run --rm my_docker_image:latest ls -la /
+        echo "=== СБОРКА DOCKER ОБРАЗА ==="
+        docker build --no-cache -t my_docker_image:latest .
+        
+    - name: Проверка Docker образа
+      run: |
+        echo "=== ПРОВЕРКА ОБРАЗА DOCKER ==="
+        # Проверяем, что файл существует
         docker run --rm my_docker_image:latest ls -la /entrypoint.sh
-        docker run --rm my_docker_image:latest head -20 /entrypoint.sh
+        echo ""
+        echo "=== ПРОВЕРКА СОДЕРЖИМОГО ==="
+        docker run --rm my_docker_image:latest head -5 /entrypoint.sh
+        echo ""
+        echo "=== ПРОВЕРКА ИСПОЛНЯЕМОСТИ ==="
+        docker run --rm my_docker_image:latest bash -c "[[ -x /entrypoint.sh ]] && echo 'Файл исполняемый' || echo 'Файл НЕ исполняемый'"
+        echo ""
+        echo "=== ПРОБНЫЙ ЗАПУСК С АРГУМЕНТАМИ ==="
+        docker run --rm my_docker_image:latest --help || true
       
     - name: Run Docker Container
       run: |
+        echo "=== ЗАПУСК СБОРКИ ==="
         docker run --rm \
           -v $PWD/out:/workspace/out \
           my_docker_image:latest \
@@ -71,13 +97,14 @@ jobs:
           --makefile-name="${{ github.event.inputs.MAKEFILE_NAME }}" \
           --build-target="${{ github.event.inputs.BUILD_TARGET }}"
           
-    - name: Check output
+    - name: Проверка выходных файлов
       run: |
-        echo "Содержимое out:"
-        ls -la out/
-        find out -type f -name "*.img*" | head -5
+        echo "=== ПРОВЕРКА РЕЗУЛЬТАТОВ ==="
+        find out -type f -name "*.img*" 2>/dev/null || echo "Файлы не найдены"
+        ls -la out/ 2>/dev/null || echo "Директория out не существует"
       
     - name: Archive Build Artifacts
+      if: success()
       uses: actions/upload-artifact@v4
       with:
         name: twrp-recovery
