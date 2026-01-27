@@ -114,7 +114,7 @@ jobs:
 
     - name: Repo Sync (minimal)
       run: |
-        repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle --current-branch --depth=1
+        repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle --current-branch
       working-directory: workspace
 
     - name: Clone device tree
@@ -159,7 +159,7 @@ jobs:
     - name: Sync Device Dependencies
       run: |
         bash ${GITHUB_WORKSPACE}/scripts/convert.sh ${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies
-        repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle --current-branch --depth=1
+        repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle --current-branch
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
       continue-on-error: true
 
