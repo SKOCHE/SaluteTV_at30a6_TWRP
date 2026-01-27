@@ -33,3 +33,4 @@ COPY entrypoint.sh /entrypoint.sh  # Обновлённый путь
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
+
