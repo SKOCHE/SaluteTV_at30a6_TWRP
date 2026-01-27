@@ -129,6 +129,14 @@ jobs:
         if_true: twrp
         if_false: omni
 
+    - name: Fix Android.bp DTW flag error
+      run: |
+        cd workspace
+        echo "Fixing DTW_USE_KEY_CODE_TOUCH_SYNC flag in Android.bp..."
+        sed -i 's/DTW_USE_KEY_CODE_TOUCH_SYNC=0/-DTW_USE_KEY_CODE_TOUCH_SYNC=0/g' bootable/recovery/gui/Android.bp
+        echo "Flag fixed"
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
     - name: Sync Device Dependencies
       run: |
         bash ${GITHUB_WORKSPACE}/scripts/convert.sh ${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies
