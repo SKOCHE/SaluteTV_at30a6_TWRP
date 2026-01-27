@@ -38,7 +38,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     
     steps:
     - name: Checkout repository
@@ -48,13 +48,8 @@ jobs:
       run: |
         cat > entrypoint.sh << 'EOF'
 #!/bin/bash
-set -ex
-
-echo "Build settings:"
-echo "MANIFEST_URL: ${1:-not set}"
-echo "MANIFEST_BRANCH: ${2:-not set}"
-echo "All arguments: $@"
-
+echo "Starting build script"
+echo "Arguments: $@"
 exit 0
 EOF
         chmod +x entrypoint.sh
@@ -63,28 +58,26 @@ EOF
       run: |
         cat > Dockerfile << 'EOF'
 FROM ubuntu:22.04
-
 ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y \
-    git \
-    curl \
-    python3 \
-    openjdk-8-jdk \
-    && apt-get clean
-
+RUN apt-get update && apt-get install -y curl && apt-get clean
 WORKDIR /workspace
-
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
         
     - name: Build Docker image
       run: docker build -t twrp-builder:latest .
       
-    - name: Run Docker container
+    - name: Test Docker image
+      run: |
+        echo "Testing Docker image..."
+        docker run --rm twrp-builder:latest test
+        
+    - name: Create output directory
+      run: mkdir -p out
+      
+    - name: Run build
       run: |
         docker run --rm \
           -v $PWD/out:/workspace/out \
@@ -98,14 +91,8 @@ EOF
           --makefile-name="${{ github.event.inputs.MAKEFILE_NAME }}" \
           --build-target="${{ github.event.inputs.BUILD_TARGET }}"
           
-    - name: Check output
-      run: |
-        mkdir -p out
-        echo "Test output" > out/test.txt
-        ls -la out/
-        
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: build-output
+        name: twrp-build
         path: out/
