@@ -44,38 +44,57 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
       
-    - name: Fix entrypoint.sh permissions
+    - name: Fix line endings in entrypoint.sh
       run: |
-        echo "=== FIXING ENTRYPOINT ==="
-        # Убираем Windows окончания строк (CRLF -> LF)
-        sed -i 's/\r$//' entrypoint.sh
+        echo "=== FIXING LINE ENDINGS ==="
+        # Устанавливаем dos2unix если нет
+        sudo apt-get update && sudo apt-get install -y dos2unix
+        
+        # Проверяем текущие окончания строк
+        echo "Проверка до:"
+        file entrypoint.sh
+        echo "Первые 20 символов:"
+        od -c entrypoint.sh | head -3
+        
+        # Исправляем окончания строк
+        dos2unix entrypoint.sh
+        
+        echo "Проверка после:"
+        file entrypoint.sh
+        echo "Первые 20 символов:"
+        od -c entrypoint.sh | head -3
+        
         # Делаем исполняемым
         chmod +x entrypoint.sh
-        # Проверяем
         ls -la entrypoint.sh
-        echo "File type:"
-        file entrypoint.sh
         
     - name: Build Docker image
+      run: docker build -t twrp-builder:latest .
+      
+    - name: Test Docker entrypoint
       run: |
-        echo "=== BUILDING DOCKER IMAGE ==="
-        docker build -t twrp-builder:latest .
-        
-    - name: Test Docker image
-      run: |
-        echo "=== TESTING DOCKER ==="
-        echo "1. File check:"
-        docker run --rm --entrypoint /bin/bash twrp-builder:latest -c "ls -la /entrypoint.sh && file /entrypoint.sh"
-        echo ""
-        echo "2. Test run:"
-        docker run --rm twrp-builder:latest --help || echo "Test completed"
+        echo "=== TESTING ENTRYPOINT ==="
+        # Проверяем, что файл работает
+        docker run --rm --entrypoint /bin/bash twrp-builder:latest -c "
+          echo '1. Checking file:'
+          ls -la /entrypoint.sh
+          echo ''
+          echo '2. First line:'
+          head -1 /entrypoint.sh
+          echo ''
+          echo '3. File type:'
+          file /entrypoint.sh
+          echo ''
+          echo '4. Line endings (should not show \\r):'
+          od -c /entrypoint.sh | head -2
+        "
         
     - name: Create output directory
       run: mkdir -p out
       
-    - name: Run TWRP build
+    - name: Run build
       run: |
-        echo "=== RUNNING BUILD ==="
+        echo "=== STARTING BUILD ==="
         docker run --rm \
           -v $PWD/out:/workspace/out \
           twrp-builder:latest \
@@ -88,14 +107,7 @@ jobs:
           --makefile-name="${{ github.event.inputs.MAKEFILE_NAME }}" \
           --build-target="${{ github.event.inputs.BUILD_TARGET }}"
           
-    - name: Check output
-      run: |
-        echo "=== CHECKING OUTPUT ==="
-        ls -la out/ || echo "No output directory"
-        find out -type f 2>/dev/null || echo "No files found"
-        
     - name: Upload artifacts
-      if: success()
       uses: actions/upload-artifact@v4
       with:
         name: twrp-recovery
