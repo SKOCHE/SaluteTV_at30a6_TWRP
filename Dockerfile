@@ -25,17 +25,18 @@ RUN apt-get update && apt-get install -y \
     libreadline-dev \
     zlib1g-dev \
     openjdk-8-jdk \
+    dos2unix \
     && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 WORKDIR /workspace
 
 COPY entrypoint.sh /entrypoint.sh
 
-RUN sed -i 's/\r$//' /entrypoint.sh && \
+RUN dos2unix /entrypoint.sh && \
     chmod +x /entrypoint.sh && \
-    echo "=== ПРОВЕРКА ===" && \
+    echo "=== ПРОВЕРКА ФАЙЛА ===" && \
     ls -la /entrypoint.sh && \
-    file /entrypoint.sh && \
-    head -1 /entrypoint.sh
+    echo "Первые 3 байта (должны быть #!):" && \
+    od -c /entrypoint.sh | head -2
 
 ENTRYPOINT ["/bin/bash", "/entrypoint.sh"]
