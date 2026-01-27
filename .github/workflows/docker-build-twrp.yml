@@ -1,4 +1,4 @@
-name: Recovery Build for SaluteTV AT30A6
+name: Build TWRP Recovery
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ on:
         required: true
         default: 'twrp-11'
       DEVICE_TREE_URL:
-        description: 'Device tree repository URL'
+        description: 'Device tree URL'
         required: true
         default: 'https://github.com/SKOCHE/SaluteTV_at30a6_TWRP'
       DEVICE_TREE_BRANCH:
@@ -20,7 +20,7 @@ on:
         required: true
         default: 'main'
       DEVICE_PATH:
-        description: 'Device path in device tree'
+        description: 'Device path'
         required: true
         default: 'device/salute/at30a6'
       DEVICE_NAME:
@@ -41,53 +41,26 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-    - name: Checkout Repository
+    - name: Checkout
       uses: actions/checkout@v3
       
-    - name: Проверка файлов в репозитории
-      run: |
-        echo "=== СОДЕРЖИМОЕ РЕПОЗИТОРИЯ ==="
-        ls -la
-        echo ""
-        echo "=== ПРОВЕРКА ENTRYPOINT.SH ==="
-        ls -la entrypoint.sh
-        file entrypoint.sh
-        echo ""
-        echo "=== ПЕРВЫЕ 10 СТРОК ==="
-        head -10 entrypoint.sh
-        echo ""
-        echo "=== КОНЦЫ СТРОК ==="
-        od -c entrypoint.sh | head -20
-      
-    - name: Create output directory
+    - name: Setup output directory
       run: mkdir -p out
       
-    - name: Build Docker Image
-      run: |
-        echo "=== СБОРКА DOCKER ОБРАЗА ==="
-        docker build --no-cache -t my_docker_image:latest .
-        
-    - name: Проверка Docker образа
-      run: |
-        echo "=== ПРОВЕРКА ОБРАЗА DOCKER ==="
-        # Проверяем, что файл существует
-        docker run --rm my_docker_image:latest ls -la /entrypoint.sh
-        echo ""
-        echo "=== ПРОВЕРКА СОДЕРЖИМОГО ==="
-        docker run --rm my_docker_image:latest head -5 /entrypoint.sh
-        echo ""
-        echo "=== ПРОВЕРКА ИСПОЛНЯЕМОСТИ ==="
-        docker run --rm my_docker_image:latest bash -c "[[ -x /entrypoint.sh ]] && echo 'Файл исполняемый' || echo 'Файл НЕ исполняемый'"
-        echo ""
-        echo "=== ПРОБНЫЙ ЗАПУСК С АРГУМЕНТАМИ ==="
-        docker run --rm my_docker_image:latest --help || true
+    - name: Build Docker image
+      run: docker build -t twrp-builder:latest .
       
-    - name: Run Docker Container
+    - name: Test Docker image
       run: |
-        echo "=== ЗАПУСК СБОРКИ ==="
+        echo "Testing Docker image..."
+        docker run --rm twrp-builder:latest ls -la /entrypoint.sh
+        echo "File check passed!"
+      
+    - name: Build TWRP
+      run: |
         docker run --rm \
           -v $PWD/out:/workspace/out \
-          my_docker_image:latest \
+          twrp-builder:latest \
           --manifest-url="${{ github.event.inputs.MANIFEST_URL }}" \
           --manifest-branch="${{ github.event.inputs.MANIFEST_BRANCH }}" \
           --device-tree-url="${{ github.event.inputs.DEVICE_TREE_URL }}" \
@@ -97,16 +70,8 @@ jobs:
           --makefile-name="${{ github.event.inputs.MAKEFILE_NAME }}" \
           --build-target="${{ github.event.inputs.BUILD_TARGET }}"
           
-    - name: Проверка выходных файлов
-      run: |
-        echo "=== ПРОВЕРКА РЕЗУЛЬТАТОВ ==="
-        find out -type f -name "*.img*" 2>/dev/null || echo "Файлы не найдены"
-        ls -la out/ 2>/dev/null || echo "Директория out не существует"
-      
-    - name: Archive Build Artifacts
-      if: success()
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: twrp-recovery
         path: out/
-        retention-days: 7
