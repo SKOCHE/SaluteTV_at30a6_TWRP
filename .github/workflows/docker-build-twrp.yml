@@ -41,60 +41,57 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
+    - name: Check disk space before
+      run: df -h
+      
+    - name: Clean up disk space
+      run: |
+        echo "=== CLEANING DISK SPACE ==="
+        # Очищаем кэш
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/.ghcup
+        sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+        sudo apt-get clean
+        sudo rm -rf /var/lib/apt/lists/*
+        docker system prune -a -f || true
+        echo "After cleanup:"
+        df -h
+        
     - name: Checkout repository
       uses: actions/checkout@v3
       
-    - name: Fix line endings in entrypoint.sh
+    - name: Fix entrypoint.sh
       run: |
-        echo "=== FIXING LINE ENDINGS ==="
-        # Устанавливаем dos2unix если нет
-        sudo apt-get update && sudo apt-get install -y dos2unix
-        
-        # Проверяем текущие окончания строк
-        echo "Проверка до:"
-        file entrypoint.sh
-        echo "Первые 20 символов:"
-        od -c entrypoint.sh | head -3
-        
-        # Исправляем окончания строк
-        dos2unix entrypoint.sh
-        
-        echo "Проверка после:"
-        file entrypoint.sh
-        echo "Первые 20 символов:"
-        od -c entrypoint.sh | head -3
-        
-        # Делаем исполняемым
         chmod +x entrypoint.sh
-        ls -la entrypoint.sh
+        sed -i 's/\r$//' entrypoint.sh || true
         
-    - name: Build Docker image
-      run: docker build -t twrp-builder:latest .
-      
-    - name: Test Docker entrypoint
+    - name: Build minimal Docker image
       run: |
-        echo "=== TESTING ENTRYPOINT ==="
-        # Проверяем, что файл работает
-        docker run --rm --entrypoint /bin/bash twrp-builder:latest -c "
-          echo '1. Checking file:'
-          ls -la /entrypoint.sh
-          echo ''
-          echo '2. First line:'
-          head -1 /entrypoint.sh
-          echo ''
-          echo '3. File type:'
-          file /entrypoint.sh
-          echo ''
-          echo '4. Line endings (should not show \\r):'
-          od -c /entrypoint.sh | head -2
-        "
+        echo "=== BUILDING MINIMAL DOCKER IMAGE ==="
+        cat > Dockerfile << 'EOF'
+FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl python3 openjdk-8-jdk ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN curl -s https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo \
+    && chmod a+x /usr/local/bin/repo
+WORKDIR /workspace
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/bin/bash", "/entrypoint.sh"]
+EOF
         
-    - name: Create output directory
-      run: mkdir -p out
+        docker build -t twrp-builder:latest .
+        
+    - name: Check disk space after Docker build
+      run: df -h
       
-    - name: Run build
+    - name: Run test build
       run: |
-        echo "=== STARTING BUILD ==="
+        echo "=== RUNNING TEST BUILD ==="
+        mkdir -p out
         docker run --rm \
           -v $PWD/out:/workspace/out \
           twrp-builder:latest \
