@@ -29,7 +29,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /workspace
 
-COPY scripts/entrypoint.sh /entrypoint.sh
+COPY entrypoint.sh /entrypoint.sh  # Обновлённый путь
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
