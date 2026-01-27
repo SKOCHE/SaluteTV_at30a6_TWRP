@@ -8,16 +8,6 @@ on:
         required: true
         default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp'
       MANIFEST_BRANCH:
-        description: 'TWRP manifename: Build TWRP Recovery
-
-on:
-  workflow_dispatch:
-    inputs:
-      MANIFEST_URL:
-        description: 'TWRP manifest URL'
-        required: true
-        default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp'
-      MANIFEST_BRANCH:
         description: 'TWRP manifest branch'
         required: true
         default: 'twrp-11'
@@ -54,545 +44,48 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
       
-    - name: Setup debug information
+    - name: Create entrypoint.sh
       run: |
-        echo "=== DEBUG: SYSTEM INFO ==="
-        echo "Working directory: $(pwd)"
-        echo "GitHub workspace: $GITHUB_WORKSPACE"
+        cat > entrypoint.sh << 'EOF'
+#!/bin/bash
+set -ex
+
+echo "Build settings:"
+echo "MANIFEST_URL: ${1:-not set}"
+echo "MANIFEST_BRANCH: ${2:-not set}"
+echo "All arguments: $@"
+
+exit 0
+EOF
+        chmod +x entrypoint.sh
         
-    - name: Check repository structure
+    - name: Create Dockerfile
       run: |
-        echo "=== DEBUG: REPOSITORY STRUCTURE ==="
-        ls -la
-        if [ -f Dockerfile ]; then
-          echo "Dockerfile exists"
-          head -20 Dockerfile
-        else
-          echo "ERROR: Dockerfile not found!"
-        fi
-        
-    - name: Check and fix entrypoint.sh
-      run: |
-        echo "=== DEBUG: ENTRYPOINT.SH CHECK ==="
-        if [ -f entrypoint.sh ]; then
-          echo "✓ entrypoint.sh found"
-          ls -la entrypoint.sh
-          head -5 entrypoint.sh
-          sed -i 's/\r$//' entrypoint.sh
-          chmod +x entrypoint.sh
-        else
-          echo "✗ entrypoint.sh not found"
-          echo '#!/bin/bash' > entrypoint.sh
-          echo 'echo "Test entrypoint works!"' >> entrypoint.sh
-          echo 'echo "Arguments: $@"' >> entrypoint.sh
-          chmod +x entrypoint.sh
-        fi
-        
-    - name: Setup output directory
-      run: |
-        mkdir -p out
-        echo "out directory created"
-        
-    - name: Build Docker image with debug
-      run: |
-        echo "=== DEBUG: DOCKER BUILD ==="
-        
-        # Create simple Dockerfile
-        echo 'FROM ubuntu:22.04
-        ENV DEBIAN_FRONTEND=noninteractive
-        RUN apt-get update && apt-get install -y curl && apt-get clean
-        WORKDIR /workspace
-        COPY entrypoint.sh /entrypoint.sh
-        RUN chmod +x /entrypoint.sh
-        ENTRYPOINT ["/entrypoint.sh"]' > Dockerfile
-        
-        docker build --no-cache -t twrp-builder:latest .
-        
-    - name: Test Docker image
-      run: |
-        echo "=== DEBUG: DOCKER IMAGE TEST ==="
-        docker images | grep twrp-builder
-        docker run --rm --entrypoint /bin/bash twrp-builder:latest -c "ls -la /entrypoint.sh"
-        docker run --rm twrp-builder:latest test
-        
-    - name: Build actual Docker image
-      run: |
-        echo "=== DEBUG: BUILDING ACTUAL DOCKER IMAGE ==="
-        
-        # Create actual Dockerfile
-        echo 'FROM ubuntu:22.04
+        cat > Dockerfile << 'EOF'
+FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
     git \
-    gperf \
-    build-essential \
-    gcc-multilib \
-    g++-multilib \
-    lib32z-dev \
-    lib32ncurses5-dev \
-    libxml2-utils \
-    xsltproc \
-    bc \
-    ccache \
-    liblz4-tool \
-    libncurses5-dev \
-    lzop \
-    imagemagick \
-    libbz2-dev \
-    python3 \
     curl \
-    libssl-dev \
-    libreadline-dev \
-    zlib1g-dev \
+    python3 \
     openjdk-8-jdk \
-    && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    && apt-get clean
 
 WORKDIR /workspace
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-ENTRYPOINT ["/entrypoint.sh"]' > Dockerfile
+ENTRYPOINT ["/entrypoint.sh"]
+EOF
         
-        # Create actual entrypoint - упрощенная версия для теста
-        echo '#!/bin/bash
-set -ex
-
-# Parse arguments
-for arg in "$@"; do
-    case $arg in
-        --manifest-url=*)
-            MANIFEST_URL="${arg#*=}"
-            ;;
-        --manifest-branch=*)
-            MANIFEST_BRANCH="${arg#*=}"
-            ;;
-        --device-tree-url=*)
-            DEVICE_TREE_URL="${arg#*=}"
-            ;;
-        --device-tree-branch=*)
-            DEVICE_TREE_BRANCH="${arg#*=}"
-            ;;
-        --device-path=*)
-            DEVICE_PATH="${arg#*=}"
-            ;;
-        --device-name=*)
-            DEVICE_NAME="${arg#*=}"
-            ;;
-        --makefile-name=*)
-            MAKEFILE_NAME="${arg#*=}"
-            ;;
-        --build-target=*)
-            BUILD_TARGET="${arg#*=}"
-            ;;
-    esac
-done
-
-echo "Build settings received"
-echo "MANIFEST_URL: ${MANIFEST_URL:-not set}"
-echo "DEVICE_NAME: ${DEVICE_NAME:-not set}"
-
-# Test echo
-echo "Entrypoint работает!"
-exit 0' > entrypoint.sh
-        
-        chmod +x entrypoint.sh
-        docker build -t twrp-builder:latest .
-        
-    - name: Test actual entrypoint
-      run: |
-        echo "=== TESTING ACTUAL ENTRYPOINT ==="
-        docker run --rm twrp-builder:latest \
-          --manifest-url="https://test.com" \
-          --manifest-branch="test" \
-          --device-tree-url="https://test.com" \
-          --device-tree-branch="main" \
-          --device-path="device/test" \
-          --device-name="test" \
-          --makefile-name="test" \
-          --build-target="recovery"
-          
-    - name: Create final entrypoint
-      run: |
-        echo "=== CREATING FINAL ENTRYPOINT ==="
-        # Используем curl для загрузки полного entrypoint.sh из репозитория
-        if [ -f entrypoint.sh.original ]; then
-          cp entrypoint.sh.original entrypoint.sh
-        else
-          # Или создаем полную версию
-          cat > entrypoint.sh << 'ENTRYPOINT_EOF'
-#!/bin/bash
-set -ex
-
-# Parse arguments
-for arg in "$@"; do
-    case $arg in
-        --manifest-url=*)
-            MANIFEST_URL="${arg#*=}"
-            ;;
-        --manifest-branch=*)
-            MANIFEST_BRANCH="${arg#*=}"
-            ;;
-        --device-tree-url=*)
-            DEVICE_TREE_URL="${arg#*=}"
-            ;;
-        --device-tree-branch=*)
-            DEVICE_TREE_BRANCH="${arg#*=}"
-            ;;
-        --device-path=*)
-            DEVICE_PATH="${arg#*=}"
-            ;;
-        --device-name=*)
-            DEVICE_NAME="${arg#*=}"
-            ;;
-        --makefile-name=*)
-            MAKEFILE_NAME="${arg#*=}"
-            ;;
-        --build-target=*)
-            BUILD_TARGET="${arg#*=}"
-            ;;
-    esac
-done
-
-# Check required variables
-if [ -z "$MANIFEST_URL" ] || [ -z "$DEVICE_TREE_URL" ]; then
-    echo "Error: MANIFEST_URL and DEVICE_TREE_URL are required!"
-    exit 1
-fi
-
-# Set defaults
-MANIFEST_BRANCH="${MANIFEST_BRANCH:-twrp-11}"
-DEVICE_TREE_BRANCH="${DEVICE_TREE_BRANCH:-main}"
-BUILD_TARGET="${BUILD_TARGET:-recovery}"
-
-echo "Build starting with:"
-echo "MANIFEST_URL: $MANIFEST_URL"
-echo "MANIFEST_BRANCH: $MANIFEST_BRANCH"
-echo "DEVICE_TREE_URL: $DEVICE_TREE_URL"
-echo "DEVICE_TREE_BRANCH: $DEVICE_TREE_BRANCH"
-echo "DEVICE_PATH: $DEVICE_PATH"
-echo "DEVICE_NAME: $DEVICE_NAME"
-echo "MAKEFILE_NAME: $MAKEFILE_NAME"
-echo "BUILD_TARGET: $BUILD_TARGET"
-
-# Simulate build process
-echo "Simulating build..."
-sleep 2
-mkdir -p out/target/product/$DEVICE_NAME
-echo "Test recovery image" > out/target/product/$DEVICE_NAME/recovery.img
-gzip out/target/product/$DEVICE_NAME/recovery.img
-
-echo "Build complete!"
-exit 0
-ENTRYPOINT_EOF
-        fi
-        
-        chmod +x entrypoint.sh
-        
-    - name: Run TWRP build
-      run: |
-        echo "=== RUNNING TWRP BUILD ==="
-        docker run --rm \
-          -v $PWD/out:/workspace/out \
-          twrp-builder:latest \
-          --manifest-url="${{ github.event.inputs.MANIFEST_URL }}" \
-          --manifest-branch="${{ github.event.inputs.MANIFEST_BRANCH }}" \
-          --device-tree-url="${{ github.event.inputs.DEVICE_TREE_URL }}" \
-          --device-tree-branch="${{ github.event.inputs.DEVICE_TREE_BRANCH }}" \
-          --device-path="${{ github.event.inputs.DEVICE_PATH }}" \
-          --device-name="${{ github.event.inputs.DEVICE_NAME }}" \
-          --makefile-name="${{ github.event.inputs.MAKEFILE_NAME }}" \
-          --build-target="${{ github.event.inputs.BUILD_TARGET }}"
-          
-    - name: Check build output
-      run: |
-        echo "=== BUILD OUTPUT ==="
-        ls -la out/ || echo "No output"
-        find out -type f 2>/dev/null || echo "No files found"
-        
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: twrp-recovery
-        path: out/
-        retention-days: 7st branch'
-        required: true
-        default: 'twrp-11'
-      DEVICE_TREE_URL:
-        description: 'Device tree URL'
-        required: true
-        default: 'https://github.com/SKOCHE/SaluteTV_at30a6_TWRP'
-      DEVICE_TREE_BRANCH:
-        description: 'Device tree branch'
-        required: true
-        default: 'main'
-      DEVICE_PATH:
-        description: 'Device path'
-        required: true
-        default: 'device/salute/at30a6'
-      DEVICE_NAME:
-        description: 'Device name'
-        required: true
-        default: 'at30a6'
-      MAKEFILE_NAME:
-        description: 'Makefile name'
-        required: true
-        default: 'twrp_at30a6'
-      BUILD_TARGET:
-        description: 'Build target'
-        required: true
-        default: 'recovery'
-
-jobs:
-  build:
-    runs-on: ubuntu-22.04
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+    - name: Build Docker image
+      run: docker build -t twrp-builder:latest .
       
-    - name: Setup debug information
+    - name: Run Docker container
       run: |
-        echo "=== DEBUG: SYSTEM INFO ==="
-        echo "Working directory: $(pwd)"
-        echo "GitHub workspace: $GITHUB_WORKSPACE"
-        
-    - name: Check repository structure
-      run: |
-        echo "=== DEBUG: REPOSITORY STRUCTURE ==="
-        ls -la
-        if [ -f Dockerfile ]; then
-          echo "Dockerfile exists"
-          head -20 Dockerfile
-        else
-          echo "ERROR: Dockerfile not found!"
-        fi
-        
-    - name: Check and fix entrypoint.sh
-      run: |
-        echo "=== DEBUG: ENTRYPOINT.SH CHECK ==="
-        if [ -f entrypoint.sh ]; then
-          echo "✓ entrypoint.sh found"
-          ls -la entrypoint.sh
-          head -5 entrypoint.sh
-          sed -i 's/\r$//' entrypoint.sh
-          chmod +x entrypoint.sh
-        else
-          echo "✗ entrypoint.sh not found"
-          echo '#!/bin/bash' > entrypoint.sh
-          echo 'echo "Test entrypoint works!"' >> entrypoint.sh
-          echo 'echo "Arguments: $@"' >> entrypoint.sh
-          chmod +x entrypoint.sh
-        fi
-        
-    - name: Setup output directory
-      run: |
-        mkdir -p out
-        echo "out directory created"
-        
-    - name: Build Docker image with debug
-      run: |
-        echo "=== DEBUG: DOCKER BUILD ==="
-        
-        # Create simple Dockerfile
-        echo 'FROM ubuntu:22.04
-        ENV DEBIAN_FRONTEND=noninteractive
-        RUN apt-get update && apt-get install -y curl && apt-get clean
-        WORKDIR /workspace
-        COPY entrypoint.sh /entrypoint.sh
-        RUN chmod +x /entrypoint.sh
-        ENTRYPOINT ["/entrypoint.sh"]' > Dockerfile
-        
-        docker build --no-cache -t twrp-builder:latest .
-        
-    - name: Test Docker image
-      run: |
-        echo "=== DEBUG: DOCKER IMAGE TEST ==="
-        docker images | grep twrp-builder
-        docker run --rm --entrypoint /bin/bash twrp-builder:latest -c "ls -la /entrypoint.sh"
-        docker run --rm twrp-builder:latest test
-        
-    - name: Build actual Docker image
-      run: |
-        echo "=== DEBUG: BUILDING ACTUAL DOCKER IMAGE ==="
-        
-        # Create actual Dockerfile
-        echo 'FROM ubuntu:22.04
-
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y \
-    git \
-    gperf \
-    build-essential \
-    gcc-multilib \
-    g++-multilib \
-    lib32z-dev \
-    lib32ncurses5-dev \
-    libxml2-utils \
-    xsltproc \
-    bc \
-    ccache \
-    liblz4-tool \
-    libncurses5-dev \
-    lzop \
-    imagemagick \
-    libbz2-dev \
-    python3 \
-    curl \
-    libssl-dev \
-    libreadline-dev \
-    zlib1g-dev \
-    openjdk-8-jdk \
-    && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
-
-WORKDIR /workspace
-
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-ENTRYPOINT ["/entrypoint.sh"]' > Dockerfile
-        
-        # Create actual entrypoint - упрощенная версия для теста
-        echo '#!/bin/bash
-set -ex
-
-# Parse arguments
-for arg in "$@"; do
-    case $arg in
-        --manifest-url=*)
-            MANIFEST_URL="${arg#*=}"
-            ;;
-        --manifest-branch=*)
-            MANIFEST_BRANCH="${arg#*=}"
-            ;;
-        --device-tree-url=*)
-            DEVICE_TREE_URL="${arg#*=}"
-            ;;
-        --device-tree-branch=*)
-            DEVICE_TREE_BRANCH="${arg#*=}"
-            ;;
-        --device-path=*)
-            DEVICE_PATH="${arg#*=}"
-            ;;
-        --device-name=*)
-            DEVICE_NAME="${arg#*=}"
-            ;;
-        --makefile-name=*)
-            MAKEFILE_NAME="${arg#*=}"
-            ;;
-        --build-target=*)
-            BUILD_TARGET="${arg#*=}"
-            ;;
-    esac
-done
-
-echo "Build settings received"
-echo "MANIFEST_URL: ${MANIFEST_URL:-not set}"
-echo "DEVICE_NAME: ${DEVICE_NAME:-not set}"
-
-# Test echo
-echo "Entrypoint работает!"
-exit 0' > entrypoint.sh
-        
-        chmod +x entrypoint.sh
-        docker build -t twrp-builder:latest .
-        
-    - name: Test actual entrypoint
-      run: |
-        echo "=== TESTING ACTUAL ENTRYPOINT ==="
-        docker run --rm twrp-builder:latest \
-          --manifest-url="https://test.com" \
-          --manifest-branch="test" \
-          --device-tree-url="https://test.com" \
-          --device-tree-branch="main" \
-          --device-path="device/test" \
-          --device-name="test" \
-          --makefile-name="test" \
-          --build-target="recovery"
-          
-    - name: Create final entrypoint
-      run: |
-        echo "=== CREATING FINAL ENTRYPOINT ==="
-        # Используем curl для загрузки полного entrypoint.sh из репозитория
-        if [ -f entrypoint.sh.original ]; then
-          cp entrypoint.sh.original entrypoint.sh
-        else
-          # Или создаем полную версию
-          cat > entrypoint.sh << 'ENTRYPOINT_EOF'
-#!/bin/bash
-set -ex
-
-# Parse arguments
-for arg in "$@"; do
-    case $arg in
-        --manifest-url=*)
-            MANIFEST_URL="${arg#*=}"
-            ;;
-        --manifest-branch=*)
-            MANIFEST_BRANCH="${arg#*=}"
-            ;;
-        --device-tree-url=*)
-            DEVICE_TREE_URL="${arg#*=}"
-            ;;
-        --device-tree-branch=*)
-            DEVICE_TREE_BRANCH="${arg#*=}"
-            ;;
-        --device-path=*)
-            DEVICE_PATH="${arg#*=}"
-            ;;
-        --device-name=*)
-            DEVICE_NAME="${arg#*=}"
-            ;;
-        --makefile-name=*)
-            MAKEFILE_NAME="${arg#*=}"
-            ;;
-        --build-target=*)
-            BUILD_TARGET="${arg#*=}"
-            ;;
-    esac
-done
-
-# Check required variables
-if [ -z "$MANIFEST_URL" ] || [ -z "$DEVICE_TREE_URL" ]; then
-    echo "Error: MANIFEST_URL and DEVICE_TREE_URL are required!"
-    exit 1
-fi
-
-# Set defaults
-MANIFEST_BRANCH="${MANIFEST_BRANCH:-twrp-11}"
-DEVICE_TREE_BRANCH="${DEVICE_TREE_BRANCH:-main}"
-BUILD_TARGET="${BUILD_TARGET:-recovery}"
-
-echo "Build starting with:"
-echo "MANIFEST_URL: $MANIFEST_URL"
-echo "MANIFEST_BRANCH: $MANIFEST_BRANCH"
-echo "DEVICE_TREE_URL: $DEVICE_TREE_URL"
-echo "DEVICE_TREE_BRANCH: $DEVICE_TREE_BRANCH"
-echo "DEVICE_PATH: $DEVICE_PATH"
-echo "DEVICE_NAME: $DEVICE_NAME"
-echo "MAKEFILE_NAME: $MAKEFILE_NAME"
-echo "BUILD_TARGET: $BUILD_TARGET"
-
-# Simulate build process
-echo "Simulating build..."
-sleep 2
-mkdir -p out/target/product/$DEVICE_NAME
-echo "Test recovery image" > out/target/product/$DEVICE_NAME/recovery.img
-gzip out/target/product/$DEVICE_NAME/recovery.img
-
-echo "Build complete!"
-exit 0
-ENTRYPOINT_EOF
-        fi
-        
-        chmod +x entrypoint.sh
-        
-    - name: Run TWRP build
-      run: |
-        echo "=== RUNNING TWRP BUILD ==="
         docker run --rm \
           -v $PWD/out:/workspace/out \
           twrp-builder:latest \
@@ -605,16 +98,14 @@ ENTRYPOINT_EOF
           --makefile-name="${{ github.event.inputs.MAKEFILE_NAME }}" \
           --build-target="${{ github.event.inputs.BUILD_TARGET }}"
           
-    - name: Check build output
+    - name: Check output
       run: |
-        echo "=== BUILD OUTPUT ==="
-        ls -la out/ || echo "No output"
-        find out -type f 2>/dev/null || echo "No files found"
+        mkdir -p out
+        echo "Test output" > out/test.txt
+        ls -la out/
         
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: twrp-recovery
+        name: build-output
         path: out/
-        retention-days: 7
-
