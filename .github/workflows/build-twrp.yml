@@ -1,78 +1,162 @@
-name: TWRP Build
+name: Recovery Build for SaluteTV AT30A6
 
 on:
-  workflow_dispatch: # Allows manual triggering
+  workflow_dispatch:
+    inputs:
+      MANIFEST_URL:
+        description: 'TWRP manifest URL'
+        required: true
+        default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp'
+      MANIFEST_BRANCH:
+        description: 'TWRP manifest branch'
+        required: true
+        default: 'twrp-12.1'
+      DEVICE_TREE_URL:
+        description: 'Device tree repository URL'
+        required: true
+        default: 'https://github.com/SKOCHE/SaluteTV_at30a6_TWRP'
+      DEVICE_TREE_BRANCH:
+        description: 'Device tree branch'
+        required: true
+        default: 'main'
+      DEVICE_PATH:
+        description: 'Device path in device tree'
+        required: true
+        default: 'device/salute/at30a6'
+      COMMON_TREE_URL:
+        description: 'Common tree URL (if exists)'
+        required: false
+      COMMON_PATH:
+        description: 'Common tree path (if exists)'
+        required: false
+      DEVICE_NAME:
+        description: 'Device name'
+        required: true
+        default: 'at30a6'
+      MAKEFILE_NAME:
+        description: 'Makefile name'
+        required: true
+        default: 'twrp_at30a6'
+      BUILD_TARGET:
+        description: 'Build target'
+        required: true
+        default: 'recovery'
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    if: github.event.repository.owner.id == github.event.sender.id
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
 
     steps:
-    - name: Set up SSH Agent
-      uses: webfactory/ssh-agent@v0.8.0
-      with:
-        ssh-private-key: ${{ secrets.DEPLOY_KEY }} # Use the deploy key secret
-
-    - name: Checkout Device Tree Repository
-      uses: actions/checkout@v4
-      with:
-        repository: SKOCHE/SaluteTV_at30a6_TWRP
-        path: device/skoche/at30a6
-
-    - name: Checkout Vendor Repository
-      uses: actions/checkout@v4
-      with:
-        repository: SKOCHE/vendor_salute_at30a6
-        path: vendor/salute/at30a6
-
-    - name: Set up Environment
+    - name: Display Run Parameters
       run: |
-        sudo apt-get update
-        sudo apt-get install -y bc bison build-essential ccache curl flex git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libwxgtk3.0-gtk3-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev openjdk-11-jdk python3 python3-pip
-        sudo pip3 install psutil
+        echo "::group::Build Parameters"
+        echo "Manifest URL: ${{ github.event.inputs.MANIFEST_URL }}"
+        echo "Manifest Branch: ${{ github.event.inputs.MANIFEST_BRANCH }}"
+        echo "Device Tree URL: ${{ github.event.inputs.DEVICE_TREE_URL }}"
+        echo "Device Tree Branch: ${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
+        echo "Device Path: ${{ github.event.inputs.DEVICE_PATH }}"
+        echo "Device Name: ${{ github.event.inputs.DEVICE_NAME }}"
+        echo "Makefile Name: ${{ github.event.inputs.MAKEFILE_NAME }}"
+        echo "Build Target: ${{ github.event.inputs.BUILD_TARGET }}.img"
+        echo "::endgroup::"
 
-    - name: Set CCACHE
-      run: |
-        echo "CCACHE_DIR=$GITHUB_WORKSPACE/ccache" >> $GITHUB_ENV
-        mkdir -p $GITHUB_WORKSPACE/ccache
-        ccache -M 50G # Set cache size to 50GB
-        ccache -o compression=true
-        ccache -o hash_dir=true
+    - name: Check Out
+      uses: actions/checkout@v3
 
-    - name: Repo init
+    - name: Prepare the environment for Ubuntu 22.04
       run: |
-        mkdir twrp
-        cd twrp
-        git config --global user.email "youremail@example.com"
-        git config --global user.name "Your Name"
-        repo init --depth=1 -u https://android.googlesource.com/platform/manifest -b android-11.0.0_r39 # Android 11 as per your repo
+        sudo apt update
+        sudo apt -y upgrade
+        sudo apt -y install git gperf build-essential gcc-multilib ccache chrpath gawk flex bison python3 \
+          libncurses5-dev x11proto-core-dev libx11-dev libgl1-mesa-dev \
+          zip lzop pngcrush imagemagick libbz2-dev rsync bc \
+          openjdk-8-jdk libxml2-utils xsltproc
+
+    - name: Install OpenJDK 8
+      run: |
+        sudo apt-get install openjdk-8-jdk -y
+        java -version
+
+    - name: Setup SSH Keys
+      if: ${{ startsWith(github.event.inputs.MANIFEST_URL, 'git@github.com') }}
+      uses: webfactory/ssh-agent@v0.5.4
+      with:
+          ssh-private-key: |
+              ${{ secrets.SSH_PRIVATE_KEY }}
+    - name: Install repo
+      run: |
+        mkdir ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        sudo ln -sf ~/bin/repo /usr/bin/repo
+
+    - name: Initialize repo
+      run: |
+        mkdir workspace
+        cd workspace
+        echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
+        git config --global user.name "Nico170420"
+        git config --global user.email "b170420nc@gmail.com"
+        repo init --depth=1 -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }}
+      id: pwd
 
     - name: Repo Sync
       run: |
-        cd twrp
         repo sync -j$(nproc --all) --force-sync
+      working-directory: workspace
 
-    - name: Clean up AFTER Repo Sync (Aggressive - Customize this!)
+    - name: Clone device tree
       run: |
-        cd twrp
-        sudo rm -rf packages/apps/*    # Remove app sources.
-        sudo rm -rf packages/modules/*    # Remove module sources.
-        sudo rm -rf system/bt/* # Remove bluetooth stack (likely not needed)
+        git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
-    - name: TWRP Build
+    - name: Clone common tree
+      if: |
+        github.event.inputs.COMMON_TREE_URL != null
+        && github.event.inputs.COMMON_PATH != null
       run: |
-        cd twrp
+        git clone ${{ github.event.inputs.COMMON_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.COMMON_PATH }}
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
+    - name: Check Build Tree
+      uses: haya14busa/action-cond@v1
+      id: buildtree
+      with:
+        cond: ${{ github.event.inputs.MANIFEST_BRANCH == 'twrp-11' || github.event.inputs.MANIFEST_BRANCH == 'twrp-12.1' }}
+        if_true: twrp
+        if_false: omni
+
+    - name: Sync Device Dependencies
+      run: |
+        bash ${GITHUB_WORKSPACE}/scripts/convert.sh ${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies
+        repo sync -j$(nproc --all)
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+      continue-on-error: true
+
+    - name: Set Swap Space
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 12
+
+    - name: Building recovery
+      run: |
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        lunch twrp_at30a6-eng # Target based on device name
-        make clean
-        make recoveryimage
+        lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng && make clean && make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
+    - name: Upload to Release
+      uses: softprops/action-gh-release@v1
       with:
-        name: twrp-recovery
-        path: twrp/out/target/product/at30a6/recovery.img
-
-    - name: Debugging - Print Secret Length
-      run: echo "Secret length: ${{ secrets.DEPLOY_KEY.length }}" # REMOVE THIS AFTER DEBUGGING
+        files: workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img
+        name: ${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
+        tag_name: ${{ github.run_id }}
+        body: |
+          Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}
+          Device: ${{ github.event.inputs.DEVICE_NAME }}
+          Target: ${{ github.event.inputs.BUILD_TARGET }}.img
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
