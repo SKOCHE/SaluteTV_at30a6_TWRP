@@ -43,15 +43,12 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
-      with:
-        fetch-depth: 0
       
     - name: Setup debug information
       run: |
         echo "=== DEBUG: SYSTEM INFO ==="
         echo "Working directory: $(pwd)"
         echo "GitHub workspace: $GITHUB_WORKSPACE"
-        echo ""
         
     - name: Check repository structure
       run: |
@@ -59,14 +56,11 @@ jobs:
         echo "Listing files:"
         ls -la
         echo ""
-        echo "=== DEBUG: DOCKERFILE ==="
         if [ -f Dockerfile ]; then
           echo "Dockerfile exists"
-          cat Dockerfile
         else
           echo "ERROR: Dockerfile not found!"
         fi
-        echo ""
         
     - name: Check and fix entrypoint.sh
       run: |
@@ -74,41 +68,20 @@ jobs:
         
         if [ -f entrypoint.sh ]; then
           echo "✓ entrypoint.sh found"
-          echo "File permissions:"
           ls -la entrypoint.sh
           echo ""
           echo "First 5 lines:"
           head -5 entrypoint.sh
-          echo ""
-          # Fix line endings if needed
           sed -i 's/\r$//' entrypoint.sh
           chmod +x entrypoint.sh
         else
           echo "✗ entrypoint.sh not found, creating simple one"
-          echo '#!/bin/bash
-          echo "Test entrypoint works!"
-          echo "Arguments: $@"
-          exit 0' > entrypoint.sh
+          echo '#!/bin/bash' > entrypoint.sh
+          echo 'echo "Test entrypoint works!"' >> entrypoint.sh
+          echo 'echo "Arguments: $@"' >> entrypoint.sh
+          echo 'exit 0' >> entrypoint.sh
           chmod +x entrypoint.sh
         fi
-        
-    - name: Create test entrypoint if missing
-      run: |
-        echo "=== DEBUG: ENSURING ENTRYPOINT EXISTS ==="
-        # Простой способ создания файла без EOF
-        echo '#!/bin/bash' > entrypoint.sh
-        echo 'echo "=== ENTRYPOINT STARTED ==="' >> entrypoint.sh
-        echo 'echo "Current directory: $(pwd)"' >> entrypoint.sh
-        echo 'echo "Arguments received: $@"' >> entrypoint.sh
-        echo 'echo "Listing /:"' >> entrypoint.sh
-        echo 'ls -la / 2>/dev/null | head -5' >> entrypoint.sh
-        echo 'echo "=== ENTRYPOINT ENDED ==="' >> entrypoint.sh
-        chmod +x entrypoint.sh
-        
-        echo "Test entrypoint.sh created:"
-        ls -la entrypoint.sh
-        echo "Content:"
-        cat entrypoint.sh
         
     - name: Setup output directory
       run: |
@@ -119,14 +92,10 @@ jobs:
     - name: Build Docker image with debug
       run: |
         echo "=== DEBUG: DOCKER BUILD ==="
-        echo "Current directory contents:"
-        ls -la
-        
-        echo ""
         echo "Building Docker image..."
         
         # Create a simple Dockerfile for testing
-        cat > Dockerfile << 'DOCKERFILE_EOF'
+        cat > Dockerfile << 'EOF'
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -136,24 +105,16 @@ RUN apt-get update && apt-get install -y curl && apt-get clean
 WORKDIR /workspace
 
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh && \
-    echo "=== DOCKER BUILD DEBUG ===" && \
-    echo "File exists:" && \
-    ls -la /entrypoint.sh && \
-    echo "First line:" && \
-    head -1 /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
-DOCKERFILE_EOF
+EOF
         
-        echo "Dockerfile created:"
-        cat Dockerfile
-        echo ""
+        echo "Dockerfile created"
         
         # Build
-        docker build --progress=plain --no-cache -t twrp-builder:latest .
+        docker build --no-cache -t twrp-builder:latest .
         
-        echo ""
         echo "=== DEBUG: IMAGE BUILT ==="
         
     - name: Test Docker image
@@ -165,23 +126,22 @@ DOCKERFILE_EOF
         
         echo ""
         echo "2. Testing bash works:"
-        docker run --rm --entrypoint /bin/bash twrp-builder:latest -c "echo 'Bash test passed'" || echo "Bash test failed"
+        docker run --rm --entrypoint /bin/bash twrp-builder:latest -c "echo 'Bash test passed'"
         
         echo ""
         echo "3. Testing entrypoint file:"
-        docker run --rm --entrypoint /bin/bash twrp-builder:latest -c "ls -la /entrypoint.sh && echo 'File exists'" || echo "File check failed"
+        docker run --rm --entrypoint /bin/bash twrp-builder:latest -c "ls -la /entrypoint.sh && echo 'File exists'"
         
         echo ""
-        echo "4. Testing entrypoint execution (simple):"
-        docker run --rm twrp-builder:latest test-arg-1 test-arg-2 || echo "Entrypoint execution failed"
+        echo "4. Testing entrypoint execution:"
+        docker run --rm twrp-builder:latest test-arg-1 test-arg-2
         
     - name: Build actual Docker image
-      if: success()
       run: |
         echo "=== DEBUG: BUILDING ACTUAL DOCKER IMAGE ==="
         
         # Create actual Dockerfile
-        cat > Dockerfile << 'DOCKERFILE_EOF'
+        cat > Dockerfile << 'EOF'
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -213,26 +173,17 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /workspace
 
-# Copy the actual entrypoint from repository
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
-DOCKERFILE_EOF
+EOF
         
         echo "Actual Dockerfile created"
         
-        # Replace entrypoint.sh with actual one from repo
-        if [ -f entrypoint.sh.original ]; then
-          # Use original if we saved it
-          cp entrypoint.sh.original entrypoint.sh
-        elif [ -f entrypoint.sh ]; then
-          # Save current
-          cp entrypoint.sh entrypoint.sh.testbackup
-        fi
-        
-        # Create actual entrypoint from your content
-        echo '#!/bin/bash
+        # Create actual entrypoint
+        cat > entrypoint.sh << 'EOF'
+#!/bin/bash
 set -ex
 
 # Parse arguments
@@ -345,7 +296,8 @@ else
     exit 1
 fi
 
-exit 0' > entrypoint.sh
+exit 0
+EOF
         
         chmod +x entrypoint.sh
         
@@ -354,7 +306,6 @@ exit 0' > entrypoint.sh
         docker build -t twrp-builder:latest .
         
     - name: Run TWRP build
-      if: success()
       run: |
         echo "=== DEBUG: RUNNING TWRP BUILD ==="
         
@@ -381,9 +332,9 @@ exit 0' > entrypoint.sh
         find out -name "*.img*" -type f 2>/dev/null || echo "No image files found"
         
     - name: Upload artifacts
-      if: success()
       uses: actions/upload-artifact@v4
       with:
         name: twrp-recovery
         path: out/
         retention-days: 7
+        if-no-files-found: warn
