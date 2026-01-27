@@ -1,7 +1,7 @@
 #!/bin/bash
 set -ex
 
-# Парсим аргументы
+# Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
         --manifest-url=*)
@@ -37,24 +37,24 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         *)
-            echo "Неизвестный параметр: $1"
+            echo "Unknown parameter: $1"
             exit 1
             ;;
     esac
 done
 
-# Проверяем обязательные переменные
+# Check required variables
 if [[ -z "$MANIFEST_URL" || -z "$DEVICE_TREE_URL" ]]; then
-    echo "Ошибка: MANIFEST_URL и DEVICE_TREE_URL обязательны!"
+    echo "Error: MANIFEST_URL and DEVICE_TREE_URL are required!"
     exit 1
 fi
 
-# Устанавливаем значения по умолчанию для опциональных параметров
+# Set defaults
 : ${MANIFEST_BRANCH:="twrp-11"}
 : ${DEVICE_TREE_BRANCH:="main"}
 : ${BUILD_TARGET:="recovery"}
 
-echo "Настройки сборки:"
+echo "Build settings:"
 echo "MANIFEST_URL: $MANIFEST_URL"
 echo "MANIFEST_BRANCH: $MANIFEST_BRANCH"
 echo "DEVICE_TREE_URL: $DEVICE_TREE_URL"
@@ -64,25 +64,25 @@ echo "DEVICE_NAME: $DEVICE_NAME"
 echo "MAKEFILE_NAME: $MAKEFILE_NAME"
 echo "BUILD_TARGET: $BUILD_TARGET"
 
-# Перемещаемся в рабочую директорию
+# Change to workspace
 cd /workspace
 
-# Устанавливаем Repo tool
+# Install Repo tool
 mkdir -p bin
 curl -s https://storage.googleapis.com/git-repo-downloads/repo > bin/repo
 chmod a+x bin/repo
 ln -sf bin/repo /usr/bin/repo || true
 
-# Инициализируем и синхронизируем репозиторий
+# Initialize and sync repository
 repo init -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH" --depth=1
 repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
 
-# Клонируем дерево устройства
+# Clone device tree
 if [[ ! -d "$DEVICE_PATH" ]]; then
     git clone "$DEVICE_TREE_URL" -b "$DEVICE_TREE_BRANCH" "$DEVICE_PATH"
 fi
 
-# Очищаем и конфигурируем среду
+# Setup environment
 source build/envsetup.sh
 export ALLOW_MISSING_DEPENDENCIES=true
 export LC_ALL=C
@@ -91,22 +91,22 @@ export CCACHE_COMPRESS=1
 export CCACHE_DIR="/tmp/ccache"
 lunch "${MAKEFILE_NAME}"-eng
 
-# Собираем образ
+# Build
 make clean
 make "${BUILD_TARGET}"image -j$(nproc --all)
 
-# Архивируем полученный образ
+# Archive output
 if [[ -f "out/target/product/$DEVICE_NAME/${BUILD_TARGET}.img" ]]; then
     cd out/target/product/"$DEVICE_NAME"
     ls -lh "${BUILD_TARGET}.img"
     gzip -k "${BUILD_TARGET}.img"
-    echo "Сборка выполнена успешно!"
+    echo "Build successful!"
     
-    # Копируем в выходную директорию
+    # Copy to output directory
     mkdir -p /workspace/out
     cp "${BUILD_TARGET}.img.gz" /workspace/out/
 else
-    echo "Ошибка: файл ${BUILD_TARGET}.img не найден!"
+    echo "Error: ${BUILD_TARGET}.img not found!"
     ls -la out/target/product/"$DEVICE_NAME"/
     exit 1
 fi
