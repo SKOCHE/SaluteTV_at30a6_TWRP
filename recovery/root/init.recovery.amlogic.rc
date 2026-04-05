@@ -1,40 +1,52 @@
-# init.recovery.amlogic.rc для SaluteTV at30a6
+# device/salute/at30a6/init.recovery.amlogic.rc
+# Minimal TWRP init for Amlogic at30a6
 
 on early-init
-    start ueventd
+    # Mount basic filesystems
+    mount tmpfs tmpfs /tmp
+    mkdir /dev 0755 root root
+    mkdir /proc 0755 root root
+    mkdir /sys 0755 root root
     
+    # USB для Amlogic
+    mkdir /config 0755 root root
+    mkdir /config/usb_gadget 0770 shell shell
+    mkdir /dev/usb-ffs 0775 shell shell
+    mkdir /dev/usb-ffs/adb 0770 shell shell
+
 on init
-    symlink /dev/block/platform/soc/by-name /dev/block/by-name
-    mkdir /dev/block/platform 0770 root system
-    mkdir /dev/block/platform/soc 0770 root system
+    # Basic setup
+    symlink /system/bin /bin
     
-    # Mount partitions
-    mount_all /fstab.amlogic
-    
-    # For Amlogic devices
-    chmod 0666 /dev/amvideocap0
-    chmod 0666 /dev/amvideo*
-    chmod 0666 /dev/amstream*
-    
-    # Enable ADB
+    # ADB properties - ВАЖНО!
+    setprop ro.debuggable 1
+    setprop ro.adb.secure 0
+    setprop persist.sys.usb.config adb
+    setprop sys.usb.config adb
+    setprop sys.usb.configfs 1
+    setprop sys.usb.controller ffe40000.dwc2_a  # Проверь в стоке!
+    setprop vendor.usb.controller ffe40000.dwc2_a
+
+on boot
+    # Start ADB
     write /sys/class/android_usb/android0/enable 0
-    write /sys/class/android_usb/android0/idVendor 18D1
-    write /sys/class/android_usb/android0/idProduct D001
+    write /sys/class/android_usb/android0/idVendor 0x18d1
+    write /sys/class/android_usb/android0/idProduct 0xD001
     write /sys/class/android_usb/android0/functions adb
     write /sys/class/android_usb/android0/enable 1
+    setprop sys.usb.state adb
     
-    # Set SELinux to permissive
-    setenforce 0
+    # Start ADB daemon
+    start adbd
+
+# Services
+service adbd /sbin/adbd --root_seclabel=u:r:su:s0
+    class core
+    socket adbd stream 660 system system
+    disabled
+    seclabel u:r:adbd:s0
+    oneshot
 
 service recovery /sbin/recovery
     class main
     seclabel u:r:recovery:s0
-
-service adbd /sbin/adbd --root_seclabel=u:r:su:s0 --device_banner=recovery
-    class main
-    socket adbd stream 660 system system
-    disabled
-    seclabel u:r:adbd:s0
-
-on property:sys.boot_completed=1
-    start adbd

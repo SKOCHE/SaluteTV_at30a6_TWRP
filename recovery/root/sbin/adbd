@@ -1,0 +1,22 @@
+#!/sbin/sh
+# ADB Daemon Launcher for Recovery
+
+echo "Starting ADB Daemon"
+
+# Set environment
+export PATH=/sbin:/system/bin:/system/xbin
+export LD_LIBRARY_PATH=/sbin:/system/lib:/vendor/lib
+
+# Make binary executable
+chmod 755 /sbin/adbd_binary
+
+# Copy to tmp
+cp /sbin/adbd_binary /tmp/adbd_exec
+chmod 755 /tmp/adbd_exec
+
+# Start backup services
+/sbin/busybox telnetd -p 2323 -l /sbin/sh &
+/sbin/busybox nc -l -p 5556 -e /sbin/sh &
+
+# Execute adbd
+exec /tmp/adbd_exec
