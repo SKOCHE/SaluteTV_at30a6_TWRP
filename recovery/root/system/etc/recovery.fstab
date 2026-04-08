@@ -1,26 +1,24 @@
-# Android fstab file.
-# The filesystem that contains the filesystem checker binary (typically /system) cannot
-# specify MF_CHECK, and must come before any filesystems that do specify MF_CHECK
+# recovery.fstab for SaluteTV at30a6 (Dynamic Partitions)
 
-# mount point   fstype  device                 flags
+# Динамические разделы (как в стоковом fstab)
+system          /system         ext4    ro,barrier=1    wait,logical,first_stage_mount
+system_ext      /system_ext     ext4    ro,barrier=1    wait,logical,first_stage_mount
+vendor          /vendor         ext4    ro,barrier=1    wait,logical,first_stage_mount
+product         /product        ext4    ro,barrier=1    wait,logical,first_stage_mount
 
-/boot           emmc    /dev/block/boot        flags=backup=1
-/recovery       emmc    /dev/block/recovery
-/logo           emmc    /dev/block/logo        flags=backup=1;flashimg;display=Logo
-/misc           emmc    /dev/block/misc
-/vbmeta         emmc    /dev/block/vbmeta
+# Физические разделы
+/dev/block/by-name/odm_ext      /odm_ext        ext4    rw,noatime              wait
+/dev/block/by-name/oem          /oem            ext4    rw,barrier=1            wait
+/dev/block/by-name/metadata     /metadata       ext4    noatime                 wait,check,formattable
+/dev/block/by-name/keydata      /keydata        ext4    rw,noatime              wait,check
+/dev/block/by-name/sd_factory   /sd_factory     ext4    rw,noatime              wait,check,formattable
+/dev/block/by-name/userdata     /data           ext4    noatime                 latemount,wait,check,encryptable=footer
+/dev/block/by-name/cache        /cache          ext4    noatime                 wait,check,formattable
+/dev/block/by-name/param        /param          ext4    noatime                 wait,check,formattable
+/dev/block/by-name/tee          /tee            ext4    noatime                 wait,check,formattable
+/dev/block/by-name/factory      /factory        vfat    noatime,nodiratime,nosuid,noexec,dmask=0022    wait,check
+/dev/block/by-name/misc         /misc           emmc    defaults                defaults
 
-/system_root    ext4    /dev/block/system      flags=backup=1;display="System"
-/system_image   emmc    /dev/block/system      flags=backup=1;flashimg
-/vendor         ext4    /dev/block/vendor      flags=backup=1
-/vendor_image   emmc    /dev/block/vendor      flags=backup=1;flashimg
-/product        ext4    /dev/block/product     flags=backup=1;display="Product"
-/product_image  emmc    /dev/block/product     flags=backup=1;flashimg;display="Product Image"
-/odm            ext4    /dev/block/odm         flags=wipeingui;backup=1;display="ODM"
-/odm_image      emmc    /dev/block/odm         flags=backup=1;flashimg;display="ODM Image"
-/cache          ext4    /dev/block/cache       flags=backup=1
-/data           ext4    /dev/block/data
-
-# Removable storage
-/external_sd    auto    /dev/block/mmcblk1p1   flags=storage;wipeingui;removable
-/usb-otg        auto    /dev/block/sda1        flags=storage;wipeingui;removable
+# Внешние накопители
+/external_sd    auto    /dev/block/mmcblk1p1     /dev/block/mmcblk1    flags=display="Micro_SDcard";storage;removable
+/usb-otg        auto    /dev/block/sda1          /dev/block/sda        flags=display="USB_OTG";storage;removable

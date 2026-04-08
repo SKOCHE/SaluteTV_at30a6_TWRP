@@ -1,0 +1,6 @@
+#!/sbin/sh
+# Minimal shell for testing
+echo "Recovery shell active"
+echo "ADB should be starting..."
+echo "Running shell for manual testing"
+exec /sbin/sh

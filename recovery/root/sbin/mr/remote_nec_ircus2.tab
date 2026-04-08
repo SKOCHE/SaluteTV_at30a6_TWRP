@@ -1,0 +1,40 @@
+# auto create by script
+
+custom_name = remote_nec_ircus1
+custom_code = 0xbf40
+release_delay = 80
+fn_key_scancode = 0xffff
+
+wakeup_begin
+    0xed12bf40
+wakeup_end
+
+key_begin
+        0x12 116
+        0x01 2
+        0x02 3
+        0x03 4
+        0x04 5
+        0x05 6
+        0x06 7
+        0x07 8
+        0x08 9
+        0x09 10
+        0x00 11
+        0x42 105
+        0x40 106
+        0x1d 108
+        0x19 103
+        0x21 28
+        0x43 158
+        0x48 102
+        0x5b 139
+        0x10 113
+        0x1a 115
+        0x1e 114
+        0x1b 402
+        0x1f 403
+        0x14 79
+        0x52 850
+key_end
+

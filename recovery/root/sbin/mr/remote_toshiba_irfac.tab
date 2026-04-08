@@ -1,0 +1,27 @@
+# auto create by script
+
+custom_name = remote_toshiba_irfac
+custom_code = 0x0707
+release_delay = 80
+fn_key_scancode = 0xffff
+
+wakeup_begin
+    0xfd020707
+wakeup_end
+
+key_begin
+        0x02 116
+        0x12 402
+        0x10 403
+        0x07 115
+        0x0b 114
+        0x0f 113
+        0x68 28
+        0x60 103
+        0x61 108
+        0x65 105
+        0x62 106
+        0x1a 139
+        0x79 102
+key_end
+
