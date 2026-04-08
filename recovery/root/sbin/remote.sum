@@ -1,0 +1,9 @@
+rc_tag_str = nec
+
+nec_rc_cfg = /odm_ext/etc/mr/remote_nec.cfg
+nec_rc_begin
+    /odm_ext/etc/mr/remote_nec_ircus1.tab
+    /odm_ext/etc/mr/remote_nec_ircus2.tab
+    /odm_ext/etc/mr/remote_nec_irfac.tab
+nec_rc_end
+

@@ -1,0 +1,27 @@
+cc_prebuilt_library_shared {
+    name: "libadbconnection_client",
+    srcs: ["libadbconnection_client.so"],
+    strip: { none: true },
+    product_specific: true,
+}
+
+cc_prebuilt_library_shared {
+    name: "libadb_pairing_auth",
+    srcs: ["libadb_pairing_auth.so"],
+    strip: { none: true },
+    product_specific: true,
+}
+
+cc_prebuilt_library_shared {
+    name: "libadb_pairing_connection",
+    srcs: ["libadb_pairing_connection.so"],
+    strip: { none: true },
+    product_specific: true,
+}
+
+cc_prebuilt_library_shared {
+    name: "libadb_pairing_server",
+    srcs: ["libadb_pairing_server.so"],
+    strip: { none: true },
+    product_specific: true,
+}
