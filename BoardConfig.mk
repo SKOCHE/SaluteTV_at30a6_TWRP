@@ -21,6 +21,10 @@ TARGET_USES_TV := true
 ALLOW_MISSING_DEPENDENCIES := true
 BUILD_BROKEN_DUP_RULES := true
 TARGET_USES_LEGACY_BINDER := true
+# Флаги для обхода ошибок совместимости
+BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true
+RELAX_USES_LIBRARY_CHECK := true
+SKIP_BOOT_JARS_CHECK := true
 
 # Ядро
 TARGET_PREBUILT_KERNEL := device/salute/at30a6/prebuilt/kernel
