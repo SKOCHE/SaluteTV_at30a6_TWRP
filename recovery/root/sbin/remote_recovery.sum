@@ -1,9 +1,0 @@
-rc_tag_str = nec
-
-nec_rc_cfg = /sbin/remote_nec.cfg
-nec_rc_begin
-    /sbin/remote_nec_ircus1.tab
-    /sbin/remote_nec_ircus2.tab
-    /sbin/remote_nec_irfac.tab
-nec_rc_end
-
