@@ -8,7 +8,7 @@ PRODUCT_MANUFACTURER := SaluteTV
 
 PRODUCT_PACKAGES += \
     android.hardware.fastboot@1.0-impl-mock \
-    android.hardware.fastboot@1.0-impl-mock.recovery 
+    android.hardware.fastboot@1.0-impl-mock.recovery \
     fastbootd \
     tune2fs \
     mke2fs
