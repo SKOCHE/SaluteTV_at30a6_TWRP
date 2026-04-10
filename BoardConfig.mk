@@ -20,7 +20,7 @@ TARGET_USES_TV := true
 # Разрешить ошибки
 ALLOW_MISSING_DEPENDENCIES := true
 BUILD_BROKEN_DUP_RULES := true
-
+RELAX_USES_LIBRARY_CHECK := true
 # Ядро
 TARGET_PREBUILT_KERNEL := device/salute/at30a6/prebuilt/kernel
 TARGET_KERNEL_ARCH := arm
