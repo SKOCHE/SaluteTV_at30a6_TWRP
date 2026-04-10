@@ -41,7 +41,7 @@ BOARD_NAME := at30a6
 BOARD_BOOTIMG_HEADER_VERSION := 4
 
 # Командная строка
-BOARD_KERNEL_CMDLINE := androidboot.dynamic_partitions=true androidboot.dynamic_partitions_retrofit=true androidboot.dtbo_idx=0 androidboot.boot_devices=soc/ffe07000.mmc use_uvm=1 printk.devkmsg=on buildvariant=user hdmimode=1080p60hz outputmode=1080p60hz fb_width=1920 fb_height=1080 vout=1080p60hz video=1920x1080@60
+BOARD_KERNEL_CMDLINE := androidboot.dynamic_partitions=true androidboot.dynamic_partitions_retrofit=true androidboot.dtbo_idx=0 androidboot.boot_devices=soc/ffe07000.mmc use_uvm=1 printk.devkmsg=on buildvariant=user androidboot.selinux=permissive
 
 BOARD_MKBOOTIMG_ARGS := \
     --pagesize $(BOARD_KERNEL_PAGESIZE) \
@@ -97,10 +97,9 @@ LZ4_RAMDISK := true
 # ====================================================
 # TWRP НАСТРОЙКИ
 # ====================================================
-TW_INCLUDE_FASTBOOT := true
 BOARD_SUPPRESS_SECURE_ERASE := true
 TW_HAS_MTP := true
-
+TW_EXCLUDE_DEFAULT_USB_INIT := true
 # FSTAB
 TARGET_RECOVERY_FSTAB := device/salute/at30a6/recovery/root/system/etc/recovery.fstab
 
@@ -116,6 +115,7 @@ TW_THEME := landscape_hdpi
 TW_BRIGHTNESS_PATH := /sys/class/backlight/backlight/brightness
 TW_MAX_BRIGHTNESS := 2047
 TW_DEFAULT_BRIGHTNESS := 1200
+TW_USE_LIBINPUT := true
 
 # Флаги совместимости
 TW_NO_EXFAT := false
@@ -128,7 +128,11 @@ TW_IGNORE_MISC_WIPE_DATA := true
 TW_INCLUDE_SUPER := true
 TW_INCLUDE_LPTOOLS := true
 TW_INCLUDE_LPDUMP := true
-
+TW_INCLUDE_RESETPROP := true
+TW_INCLUDE_LIBRESETPROP :=true
+TW_INCLUDE_FASTBOOTD := true
+TW_INCLUDE_FASTBOOT := true
+TW_EXCLUDE_ADBD := true
 # ====================================================
 # ОПТИМИЗАЦИЯ РАЗМЕРА
 # ====================================================
@@ -160,3 +164,6 @@ TW_INCLUDE_REPACKTOOLS := false
 TW_NO_BOOT_BOOTLOADER := true
 TW_NO_REBOOT_BOOTLOADER := true
 TW_INCLUDE_USB_OTG := true
+# Принудительное монтирование tmp с exec
+TW_EXEC_TMP_MOUNT := true
+

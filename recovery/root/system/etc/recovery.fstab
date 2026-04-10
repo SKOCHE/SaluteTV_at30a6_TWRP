@@ -1,0 +1,24 @@
+# recovery.fstab for SaluteTV at30a6 (Dynamic Partitions)
+
+# Динамические разделы (как в стоковом fstab)
+system          /system         ext4    ro,barrier=1    wait,logical,first_stage_mount
+system_ext      /system_ext     ext4    ro,barrier=1    wait,logical,first_stage_mount
+vendor          /vendor         ext4    ro,barrier=1    wait,logical,first_stage_mount
+product         /product        ext4    ro,barrier=1    wait,logical,first_stage_mount
+
+# Физические разделы
+/dev/block/by-name/odm_ext      /odm_ext        ext4    rw,noatime              wait
+/dev/block/by-name/oem          /oem            ext4    rw,barrier=1            wait
+/dev/block/by-name/metadata     /metadata       ext4    noatime                 wait,check,formattable
+/dev/block/by-name/keydata      /keydata        ext4    rw,noatime              wait,check
+/dev/block/by-name/sd_factory   /sd_factory     ext4    rw,noatime              wait,check,formattable
+/dev/block/by-name/userdata     /data           ext4    noatime                 latemount,wait,check,encryptable=footer
+/dev/block/by-name/cache        /cache          ext4    noatime                 wait,check,formattable
+/dev/block/by-name/param        /param          ext4    noatime                 wait,check,formattable
+/dev/block/by-name/tee          /tee            ext4    noatime                 wait,check,formattable
+/dev/block/by-name/factory      /factory        vfat    noatime,nodiratime,nosuid,noexec,dmask=0022    wait,check
+/dev/block/by-name/misc         /misc           emmc    defaults                defaults
+
+# Внешние накопители
+/external_sd    auto    /dev/block/mmcblk1p1     /dev/block/mmcblk1    flags=display="Micro_SDcard";storage;removable
+/usb-otg        auto    /dev/block/sda1          /dev/block/sda        flags=display="USB_OTG";storage;removable

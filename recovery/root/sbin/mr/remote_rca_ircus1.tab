@@ -1,0 +1,39 @@
+# auto create by script
+
+custom_name = remote_rca_ircus1
+custom_code = 0xf
+release_delay = 80
+fn_key_scancode = 0xffff
+
+wakeup_begin
+    0x101d0d5
+wakeup_end
+
+key_begin
+        0x2a 116
+        0xa3 79
+        0x2f 115
+        0x2e 114
+        0x2d 402
+        0x2c 403
+        0x08 102
+        0x06 158
+        0xec 139
+        0x59 103
+        0x58 108
+        0x56 105
+        0x57 106
+        0xf4 28
+        0xd8 401
+        0x30 11
+        0x31 2
+        0x32 3
+        0x33 4
+        0x34 5
+        0x35 6
+        0x36 7
+        0x37 8
+        0x38 9
+        0x39 10
+key_end
+

@@ -8,8 +8,9 @@ PRODUCT_MANUFACTURER := SaluteTV
 
 PRODUCT_PACKAGES += \
     tune2fs \
-    mke2fs 
+    mke2fs
 
+# Host-пакеты (оставить как было)
 PRODUCT_HOST_PACKAGES += \
     libadbconnection_client \
     libadb_pairing_auth \
@@ -22,3 +23,4 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/recovery/root/usr/keylayout/Generic.kl:usr/keylayout/Generic.kl \
     $(LOCAL_PATH)/recovery/root/usr/keylayout/qwerty.kl:usr/keylayout/qwerty.kl \
     $(LOCAL_PATH)/recovery/root/usr/idc/Generic.idc:usr/idc/Generic.idc
+
