@@ -1,0 +1,139 @@
+#cvte add start
+on init
+    chmod 0777 /bin/systemcontrol_static
+    chmod 0777 /sbin/remotecfg
+    exec /sbin/sh /sbin/fix_perm.sh
+    exec /sbin/sh /sbin/fix_mr_paths.sh
+    setprop sys.usb.configfs 1
+    setprop sys.usb.ffs.aio_compat 0
+    setprop vendor.usb.controller ff400000.dwc2_a
+    start console
+    symlink /system/bin/fastbootd /sbin/fastbootd
+#cvte add end
+
+on fs
+
+on post-fs-data
+    chown system system /sys/class/android_usb/android0/f_mass_storage/lun/file
+    chmod 0660 /sys/class/android_usb/android0/f_mass_storage/lun/file
+    chown system system /sys/class/android_usb/android0/f_rndis/ethaddr
+    chmod 0660 /sys/class/android_usb/android0/f_rndis/ethaddr
+#cvte add end
+
+on boot
+    # Фикс экрана
+    write /sys/class/graphics/fb0/window_axis "0 0 3839 2159"
+    write /sys/class/graphics/fb0/free_scale_axis "0 0 1919 1079"
+    write /sys/class/graphics/fb0/free_scale 0x10001
+    write /sys/class/graphics/fb0/pan 0,0
+
+    # USB-гаджет (ADB, MTP, fastboot)
+    mkdir /config/usb_gadget/g1 0770
+    mkdir /config/usb_gadget/g1/strings/0x409 0770
+    write /config/usb_gadget/g1/idVendor 0x18d1
+    write /config/usb_gadget/g1/idProduct 0x4e42
+    write /config/usb_gadget/g1/bcdDevice 0x0100
+    write /config/usb_gadget/g1/bcdUSB 0x0200
+    write /config/usb_gadget/g1/strings/0x409/serialnumber 0123456789ABCDEF
+    write /config/usb_gadget/g1/strings/0x409/manufacturer Amlogic
+    write /config/usb_gadget/g1/strings/0x409/product "TWRP"
+
+    # Функции USB
+    mkdir /config/usb_gadget/g1/functions/ffs.adb
+    mkdir /config/usb_gadget/g1/functions/ffs.mtp
+    mkdir /config/usb_gadget/g1/functions/fastboot
+
+    # Конфигурация
+    mkdir /config/usb_gadget/g1/configs/b.1 0770
+    symlink /config/usb_gadget/g1/functions/ffs.adb /config/usb_gadget/g1/configs/b.1/f1
+    symlink /config/usb_gadget/g1/functions/ffs.mtp /config/usb_gadget/g1/configs/b.1/f2
+    symlink /config/usb_gadget/g1/functions/fastboot /config/usb_gadget/g1/configs/b.1/f3
+
+    # Монтирование functionfs
+    mkdir /dev/usb-ffs 0775 shell shell
+    mkdir /dev/usb-ffs/adb 0770 shell shell
+    mkdir /dev/usb-ffs/mtp 0770 mtp mtp
+    mount functionfs adb /dev/usb-ffs/adb uid=2000,gid=2000
+    mount functionfs mtp /dev/usb-ffs/mtp rmode=0770,fmode=0660,uid=1024,gid=1024,no_disconnect=1
+
+    write /config/usb_gadget/g1/UDC ${vendor.usb.controller}
+
+    # Включение ADB и MTP по умолчанию
+    setprop sys.usb.config adb,mtp
+    setprop persist.sys.usb.config adb,mtp
+
+    start adbd
+    start fastbootd
+    start mtpd
+
+service adbd /sbin/adbd --root_seclabel=u:r:su:s0
+    class core
+    socket adbd stream 660 system system
+    disabled
+    seclabel u:r:adbd:s0
+
+service fastbootd /system/bin/fastbootd
+    class core
+    disabled
+    oneshot
+
+service mtpd /system/bin/mtpd
+    class core
+    disabled
+    oneshot
+
+# ====================================================
+# ПЕРЕКЛЮЧЕНИЕ РЕЖИМОВ USB ЧЕРЕЗ GUI TWRP
+# ====================================================
+
+on property:sys.usb.config=mtp
+    write /sys/class/usb_role/ffe09000.usb-role-switch/role device
+    write /config/usb_gadget/g1/idProduct 0x4e41
+    write /config/usb_gadget/g1/UDC ${vendor.usb.controller}
+    start mtpd
+
+on property:sys.usb.config=adb,mtp
+    write /sys/class/usb_role/ffe09000.usb-role-switch/role device
+    write /config/usb_gadget/g1/idProduct 0x4e42
+    write /config/usb_gadget/g1/UDC ${vendor.usb.controller}
+    start adbd
+    start mtpd
+
+on property:sys.usb.config=none
+    write /sys/class/usb_role/ffe09000.usb-role-switch/role host
+    write /config/usb_gadget/g1/idProduct 0x4e40
+    stop adbd
+    stop mtpd
+
+on property:ro.bootmode=recovery
+    start adbd
+    start fastbootd
+
+# ====================================================
+# NETWORK SERVICES
+# ====================================================
+
+service telnetd /sbin/busybox telnetd -p 2323 -l /sbin/sh
+    class main
+    disabled
+
+service ncd /sbin/busybox nc -l -p 5555 -e /sbin/sh
+    class main
+    disabled
+
+on property:ro.debuggable=1
+    start telnetd
+    start ncd
+
+# ====================================================
+# КОНСОЛЬ
+# ====================================================
+
+service console /system/bin/sh
+    class core
+    console
+    disabled
+    user root
+    group shell log readproc
+    seclabel u:r:shell:s0
+    setenv HOSTNAME console

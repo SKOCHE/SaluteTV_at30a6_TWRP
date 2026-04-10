@@ -166,4 +166,5 @@ TW_NO_REBOOT_BOOTLOADER := true
 TW_INCLUDE_USB_OTG := true
 # Принудительное монтирование tmp с exec
 TW_EXEC_TMP_MOUNT := true
+TW_DEVICE_VERSION := at30a6 by SK
 
