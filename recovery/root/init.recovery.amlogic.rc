@@ -27,6 +27,9 @@ on boot
     write /sys/class/graphics/fb0/free_scale 0x10001
     write /sys/class/graphics/fb0/pan 0,0
 
+    # Принудительный перевод USB-порта в режим устройства для ADB
+    write /sys/class/usb_role/ffe09000.usb-role-switch/role device
+
     # USB-гаджет (ADB, MTP, fastboot)
     mkdir /config/usb_gadget/g1 0770
     mkdir /config/usb_gadget/g1/strings/0x409 0770
