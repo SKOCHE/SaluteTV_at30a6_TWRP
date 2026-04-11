@@ -138,20 +138,11 @@ jobs:
 
     - name: Sync Device Dependencies
       run: |
+        export PATH=$HOME/bin:$PATH
         bash ${GITHUB_WORKSPACE}/scripts/convert.sh ${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies
         repo sync -j$(nproc --all)
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
       continue-on-error: true
-
-    - name: Set Swap Space
-      run: |
-        swapoff /swapfile 2>/dev/null || true
-        rm -f /swapfile
-        fallocate -l 8G /swapfile
-        chmod 600 /swapfile
-        mkswap /swapfile
-        swapon /swapfile
-        free -h
 
     - name: Building recovery
       run: |
