@@ -145,13 +145,14 @@ jobs:
       continue-on-error: true
 
     - name: Building recovery
+      shell: bash
       run: |
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
-        lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng
+        lunch twrp_at30a6-eng
         make clean
-        make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
+        make recoveryimage -j$(nproc --all)
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Upload to Release
