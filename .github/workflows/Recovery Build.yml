@@ -145,6 +145,8 @@ jobs:
 
     - name: Set Swap Space
       run: |
+        swapoff /swapfile 2>/dev/null || true
+        rm -f /swapfile
         fallocate -l 8G /swapfile
         chmod 600 /swapfile
         mkswap /swapfile
