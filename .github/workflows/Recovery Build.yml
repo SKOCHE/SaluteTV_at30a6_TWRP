@@ -44,7 +44,7 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v4
-      
+
     - name: Prepare environment
       run: |
         sudo apt update
@@ -63,7 +63,7 @@ jobs:
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
         echo "$HOME/bin" >> $GITHUB_PATH
-      
+
     - name: Initialize repo
       run: |
         mkdir workspace
@@ -73,18 +73,29 @@ jobs:
         git config --global user.email "actions@github.com"
         repo init --depth=1 -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }}
       id: pwd
-          
+
     - name: Repo Sync
       run: |
         cd workspace
         repo sync -j$(nproc --all) --force-sync
-      
+
+    - name: Patch libbinder version script
+      run: |
+        cd workspace
+        cat > frameworks/native/libs/binder/libbinder.arm32.map << 'EOF'
+        LIBBINDER {
+          global: *;
+          local: *;
+        };
+        EOF
+
     - name: Clone device tree
       run: |
         cd workspace
         git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ${{ github.event.inputs.DEVICE_PATH }}
 
     - name: Building recovery
+      shell: bash
       run: |
         cd workspace
         source build/envsetup.sh
