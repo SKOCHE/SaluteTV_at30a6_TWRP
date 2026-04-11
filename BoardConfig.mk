@@ -118,13 +118,6 @@ TW_THEME := landscape_hdpi
 TW_BRIGHTNESS_PATH := /sys/class/backlight/backlight/brightness
 TW_MAX_BRIGHTNESS := 2047
 TW_DEFAULT_BRIGHTNESS := 1200
-TW_USE_LIBINPUT := true
-
-# Флаги совместимости
-TW_NO_EXFAT := false
-TW_NO_EXFAT_FUSE := true
-TW_IGNORE_MISC_WIPE_DATA := true
-
 # ====================================================
 # SUPER-РАЗДЕЛЫ (КЛЮЧЕВЫЕ ФЛАГИ)
 # ====================================================
@@ -135,7 +128,6 @@ TW_INCLUDE_RESETPROP := true
 TW_INCLUDE_LIBRESETPROP :=true
 TW_INCLUDE_FASTBOOTD := true
 TW_INCLUDE_FASTBOOT := true
-TW_EXCLUDE_ADBD := true
 # ====================================================
 # ОПТИМИЗАЦИЯ РАЗМЕРА
 # ====================================================
@@ -167,7 +159,5 @@ TW_INCLUDE_REPACKTOOLS := false
 TW_NO_BOOT_BOOTLOADER := true
 TW_NO_REBOOT_BOOTLOADER := true
 TW_INCLUDE_USB_OTG := true
-# Принудительное монтирование tmp с exec
-TW_EXEC_TMP_MOUNT := true
 TW_DEVICE_VERSION := at30a6 by SK
 
