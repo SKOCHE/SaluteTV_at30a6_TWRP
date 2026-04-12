@@ -11,7 +11,9 @@ PRODUCT_PACKAGES += \
     android.hardware.fastboot@1.0-impl-mock.recovery \
     fastbootd \
     tune2fs \
-    mke2fs
+    mke2fs \
+    -libbinder_ndk
+
 
 PRODUCT_HOST_PACKAGES += \
     libadbconnection_client \
