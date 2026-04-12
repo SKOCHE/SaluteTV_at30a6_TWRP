@@ -6,7 +6,7 @@ on:
       MANIFEST_URL:
         description: 'MANIFEST_URL'
         required: true
-        default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp'
+        default: 'https://github.com/azrim/android_bootable_recovery_manifest'
       MANIFEST_BRANCH:
         description: 'MANIFEST_BRANCH'
         required: true
@@ -31,82 +31,48 @@ on:
         description: 'MAKEFILE_NAME'
         required: true
         default: 'twrp_at30a6'
-      BUILD_TARGET:
-        description: 'BUILD_TARGET'
-        required: true
-        default: 'recovery'
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: write
+    runs-on: ubuntu-20.04
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
-    - name: Prepare environment
+    - uses: actions/checkout@v4
+    - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y git-core gnupg flex bison build-essential zip curl zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 libncurses5 lib32ncurses5-dev lib32z1-dev x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3 bc ccache liblz4-tool libsdl1.2-dev lzop pngcrush schedtool squashfs-tools imagemagick libbz2-dev lzma ncftp qemu-user-static python-is-python3
-        sudo apt install -y libwxgtk3.0-gtk3-dev || true
-
-    - name: Install OpenJDK
+        sudo apt install -y git-core gnupg flex bison build-essential zip curl zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 libncurses5 lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3 bc ccache liblz4-tool libsdl1.2-dev lzop pngcrush schedtool squashfs-tools imagemagick libbz2-dev lzma ncftp qemu-user-static
+    - name: Set up Java 8
       uses: actions/setup-java@v4
       with:
         distribution: 'zulu'
         java-version: '8'
-
     - name: Install repo
       run: |
         mkdir -p ~/bin
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
         echo "$HOME/bin" >> $GITHUB_PATH
-
-    - name: Initialize repo
+    - name: Init repo
       run: |
-        mkdir workspace
-        cd workspace
-        echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
-        git config --global user.name "GitHub Actions"
-        git config --global user.email "actions@github.com"
-        repo init --depth=1 -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }}
-      id: pwd
-
-    - name: Repo Sync
+        mkdir workspace && cd workspace
+        repo init -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }} --depth=1
+    - name: Repo sync
       run: |
         cd workspace
         repo sync -j$(nproc --all) --force-sync
-
-    - name: Patch libbinder version script
-      run: |
-        cd workspace
-        cat > frameworks/native/libs/binder/libbinder.arm32.map << 'EOF'
-        LIBBINDER {
-          global: *;
-          local: *;
-        };
-        EOF
-
     - name: Clone device tree
       run: |
         cd workspace
         git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ${{ github.event.inputs.DEVICE_PATH }}
-
-    - name: Building recovery
-      shell: bash
+    - name: Build recovery
       run: |
         cd workspace
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        export LC_ALL=C
         lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng
-        make clean
-        make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
-
-    - name: Upload recovery image
+        make recoveryimage -j$(nproc --all)
+    - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.event.inputs.DEVICE_NAME }}-recovery
-        path: workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img
+        name: recovery-${{ github.event.inputs.DEVICE_NAME }}
+        path: workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img
