@@ -59,13 +59,14 @@ BOARD_MKBOOTIMG_ARGS := \
 BOARD_BOOTIMAGE_PARTITION_SIZE := 67108864
 BOARD_RECOVERYIMAGE_PARTITION_SIZE := 33554432
 BOARD_FLASH_BLOCK_SIZE := 4096
+TW_AML_VENDOR_BOOT := true
 
 # Динамические разделы
 BOARD_SUPER_PARTITION_SIZE := 4294967296
 BOARD_SUPER_PARTITION_GROUPS := amlogic_dynamic_partitions
 BOARD_AMLOGIC_DYNAMIC_PARTITIONS_SIZE := 4290822144
-BOARD_AMLOGIC_DYNAMIC_PARTITIONS_PARTITION_LIST := system vendor product system_ext odm vendor_dlkm 
-
+BOARD_AMLOGIC_DYNAMIC_PARTITIONS_PARTITION_LIST := system vendor product system_ext odm vendor_dlkm system_dlkm odm_dlkm
+BOARD_USES_METADATA_PARTITION := true
 # Файловые системы
 BOARD_HAS_LARGE_FILESYSTEM := true
 TARGET_USERIMAGES_USE_EXT4 := true
@@ -97,12 +98,12 @@ LZ4_RAMDISK := true
 # ====================================================
 # TWRP НАСТРОЙКИ
 # ====================================================
-BOARD_SUPPRESS_SECURE_ERASE := true
-TW_HAS_MTP := true
+TW_HAS_MTP := false
 TW_EXCLUDE_DEFAULT_USB_INIT := true
 # FSTAB
-TARGET_RECOVERY_FSTAB := device/salute/at30a6/recovery/root/system/etc/recovery.fstab
-
+# В BoardConfig.mk
+TW_FSTAB := device/salute/at30a6/recovery/root/system/etc/recovery.fstab
+BOARD_USES_APEX := false
 # ====================================================
 # ГРАФИКА
 # ====================================================
@@ -112,9 +113,10 @@ TW_SCREEN_WIDTH := 1920
 TW_SCREEN_HEIGHT := 1080
 TW_DPI := 320
 TW_THEME := landscape_hdpi
-TW_BRIGHTNESS_PATH := /sys/class/backlight/backlight/brightness
+TW_BRIGHTNESS_PATH := /sys/devices/platform/backlight/backlight/aml-bl/brightness
 TW_MAX_BRIGHTNESS := 2047
 TW_DEFAULT_BRIGHTNESS := 1200
+
 # ====================================================
 # SUPER-РАЗДЕЛЫ (КЛЮЧЕВЫЕ ФЛАГИ)
 # ====================================================
@@ -126,15 +128,17 @@ TW_INCLUDE_LIBRESETPROP :=true
 TW_INCLUDE_FASTBOOTD := true
 TW_INCLUDE_FASTBOOT := true
 # ====================================================
+# ВНУТРЕННЯЯ ПАМЯТЬ (ЭМУЛИРУЕМОЕ ХРАНИЛИЩЕ)
+# ====================================================
+RECOVERY_SDCARD_ON_DATA := true
+TW_CLEAR_MISC := true
+TW_CLEAR_ENV := true
+# ====================================================
 # ОПТИМИЗАЦИЯ РАЗМЕРА
 # ====================================================
-TW_NO_LEGACY_PROPS := true
-RECOVERY_BUSYBOX_BINARY := true
-TARGET_RECOVERY_BUSYBOX_BINARY := true
 TW_INCLUDE_BUSYBOX := true
 TW_USE_TOOLBOX := false
 TW_NO_CRYPTO := true
-
 # Android Verified Boot
 BOARD_AVB_ENABLE := false
 
@@ -152,9 +156,8 @@ TW_EXCLUDE_NANO := true
 TW_EXCLUDE_VIM := true
 TW_EXCLUDE_APEX := true
 TW_EXTRA_LANGUAGES := false
-TW_INCLUDE_REPACKTOOLS := false
-TW_NO_BOOT_BOOTLOADER := true
-TW_NO_REBOOT_BOOTLOADER := true
-TW_INCLUDE_USB_OTG := true
+TW_INCLUDE_REPACKTOOLS := true
+# ====================================================
+BOARD_SUPPRESS_SECURE_ERASE := true
 TW_DEVICE_VERSION := at30a6 by SK
 
