@@ -82,7 +82,7 @@ jobs:
         cd workspace
         git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ${{ github.event.inputs.DEVICE_PATH }}
 
-    - name: Fix libbinder map file (ЕДИНСТВЕННЫЙ НУЖНЫЙ ФИКС)
+    - name: Fix libbinder map file (CRITICAL FIX)
       run: |
         cd workspace
         MAP_FILE="frameworks/native/libs/binder/libbinder.arm32.map"
@@ -102,8 +102,22 @@ jobs:
         lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng
         make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
 
-    - name: Upload recovery image
+    - name: Upload recovery image to Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: ${{ github.event.inputs.DEVICE_NAME }}-recovery
         path: workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img
+
+    - name: Upload recovery to Releases
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: "latest"
+        name: "Latest TWRP Build for ${{ github.event.inputs.DEVICE_NAME }}"
+        body: |
+          ## Автоматическая сборка TWRP
+          
+          **Устройство:** ${{ github.event.inputs.DEVICE_NAME }}
+          **Дата сборки:** $(date +'%Y-%m-%d %H:%M:%S')
+          **Ветка манифеста:** ${{ github.event.inputs.MANIFEST_BRANCH }}
+          **Коммит дерева устройства:** ${{ github.sha }}
+          
